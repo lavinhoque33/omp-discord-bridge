@@ -1,5 +1,5 @@
 {
-  "name": "omp-discord-hermes-bridge",
+  "name": "omp-discord-bridge",
   "version": "0.1.0",
   "description": "Discord gateway daemon for persistent per-thread OMP agent sessions.",
   "type": "module",
@@ -48,19 +48,18 @@
   "author": "Carter McAlister",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/CarterMcAlister/omp-discord-hermes-bridge.git"
+    "url": "git+https://github.com/CarterMcAlister/omp-discord-bridge.git"
   },
   "bugs": {
-    "url": "https://github.com/CarterMcAlister/omp-discord-hermes-bridge/issues"
+    "url": "https://github.com/CarterMcAlister/omp-discord-bridge/issues"
   },
-  "homepage": "https://github.com/CarterMcAlister/omp-discord-hermes-bridge#readme",
+  "homepage": "https://github.com/CarterMcAlister/omp-discord-bridge#readme",
   "keywords": [
     "omp",
     "oh-my-pi",
     "discord",
     "bot",
     "agent",
-    "hermes",
     "acp",
     "agent-client-protocol"
   ],

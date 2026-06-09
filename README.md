@@ -1,4 +1,4 @@
-# OMP Discord Hermes Bridge
+# OMP Discord Bridge
 
 A production-ready Discord gateway for [OMP / Oh My Pi](https://omp.sh/). Mention your bot in an allowed Discord channel and the bridge creates a dedicated thread backed by a persistent OMP agent session. Follow-up messages, slash commands, stop/status controls, and attachments all stay scoped to that thread.
 
@@ -64,8 +64,8 @@ Bridge/session commands remain prefixed to avoid collisions:
 ## Installation
 
 ```bash
-git clone https://github.com/CarterMcAlister/omp-discord-hermes-bridge.git
-cd omp-discord-hermes-bridge
+git clone https://github.com/CarterMcAlister/omp-discord-bridge.git
+cd omp-discord-bridge
 npm install
 npm run build
 ```

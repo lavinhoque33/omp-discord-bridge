@@ -7,7 +7,7 @@ const extension: ExtensionFactory = (pi) => {
     description: "Show OMP Discord bridge setup/status commands.",
     handler: async () => {
       const text = [
-        "OMP Discord Hermes Bridge",
+        "OMP Discord Bridge",
         `Config: ${configPath}`,
         "Daemon: run `omp-discord-bridge --config <path>` in a service manager or shell.",
         "Discord controls inside managed threads: status, stop, new, compact.",
