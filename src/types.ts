@@ -20,6 +20,7 @@ export interface DiscordSlashCommandConfig {
   enabled: boolean;
   syncOnStart: boolean;
   commandPrefix: string;
+  acpCommandMode: "explicit" | "core" | "auto";
   acpCommands: BridgeAvailableCommand[];
 }
 

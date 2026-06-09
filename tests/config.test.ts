@@ -34,6 +34,12 @@ describe("config", () => {
   it("rejects unknown OMP session modes", () => {
     expect(() => normalizeConfig({ discord: { guilds: [{ id: "g" }] }, omp: { mode: "bogus" } })).toThrow(/omp.mode/);
   });
+  it("supports auto ACP slash command discovery mode", () => {
+    const cfg = normalizeConfig({ discord: { guilds: [{ id: "g" }], slashCommands: { acpCommands: "auto" } } });
+    expect(cfg.discord.slashCommands.acpCommandMode).toBe("auto");
+    expect(cfg.discord.slashCommands.acpCommands).toEqual([]);
+  });
+
   it("normalizes configured ACP slash commands", () => {
     const cfg = normalizeConfig({ discord: { guilds: [{ id: "g" }], slashCommands: { acpCommands: [{ name: "todo", description: "Manage todos", inputHint: "args" }] } } });
     expect(cfg.discord.slashCommands.acpCommands).toEqual([{ name: "todo", description: "Manage todos", inputHint: "args" }]);

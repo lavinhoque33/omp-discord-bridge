@@ -36,6 +36,7 @@ function fakeInteraction(commandName: string, overrides: any = {}) {
     user: { id: "user1", bot: false },
     options: { getString: vi.fn((name: string) => (name === "prompt" ? prompt : null)) },
     isChatInputCommand: () => true,
+    isAutocomplete: () => false,
     deferReply: vi.fn(async (_options?: any) => undefined),
     editReply: vi.fn(async (_message: any) => undefined),
     reply: vi.fn(async (_message: any) => undefined),
@@ -123,18 +124,54 @@ describe("Discord orchestration", () => {
     store.close();
   });
 
-  it("routes configured ACP slash command interactions as slash prompts", async () => {
+  it("routes direct configured ACP slash command interactions as slash prompts", async () => {
     const tmp = mkdtempSync(path.join(os.tmpdir(), "bridge-discord-"));
     const config = normalizeConfig({ discord: { guilds: [{ id: "guild1", allowedChannels: ["chan1"], allowedUsers: ["user1"] }], slashCommands: { acpCommands: [{ name: "todo", description: "Manage todos", inputHint: "args" }] } }, omp: { cwd: tmp, sessionRoot: path.join(tmp, "sessions") }, runtime: { databasePath: path.join(tmp, "db.sqlite"), followupMode: "queue" } });
     const store = new BridgeStore(config.runtime.databasePath);
     store.createSession({ threadId: "thread1", guildId: "guild1", parentChannelId: "chan1", triggerMessageId: "msg0", sessionFile: null, sessionDir: path.join(tmp, "sessions/thread1"), cwd: tmp, model: null, thinkingLevel: null, createdByUserId: "user1" });
     const runner = { poke: vi.fn(), steer: vi.fn(async () => false), status: vi.fn(), stop: vi.fn(), newSession: vi.fn(), compact: vi.fn() } as any;
-    const interaction = fakeInteraction("omp-todo", { id: "interaction-acp", options: { getString: vi.fn((name: string) => (name === "input" ? "list" : null)) } });
+    const interaction = fakeInteraction("todo", { id: "interaction-acp", options: { getString: vi.fn((name: string) => (name === "input" ? "list" : null)) } });
 
     await handleDiscordInteraction({ config, store, runner }, interaction);
 
     expect(store.nextQueued("thread1")).toMatchObject({ content: "/todo list" });
     expect(runner.poke).toHaveBeenCalledWith("thread1");
+    store.close();
+  });
+
+  it("routes namespace ACP slash command interactions with autocomplete-selected command names", async () => {
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "bridge-discord-"));
+    const config = normalizeConfig({ discord: { guilds: [{ id: "guild1", allowedChannels: ["chan1"], allowedUsers: ["user1"] }], slashCommands: { acpCommands: [{ name: "skill:test-driven-development", description: "TDD", inputHint: "args" }] } }, omp: { cwd: tmp, sessionRoot: path.join(tmp, "sessions") }, runtime: { databasePath: path.join(tmp, "db.sqlite"), followupMode: "queue" } });
+    const store = new BridgeStore(config.runtime.databasePath);
+    store.createSession({ threadId: "thread1", guildId: "guild1", parentChannelId: "chan1", triggerMessageId: "msg0", sessionFile: null, sessionDir: path.join(tmp, "sessions/thread1"), cwd: tmp, model: null, thinkingLevel: null, createdByUserId: "user1" });
+    const runner = { poke: vi.fn(), steer: vi.fn(async () => false), status: vi.fn(), stop: vi.fn(), newSession: vi.fn(), compact: vi.fn() } as any;
+    const interaction = fakeInteraction("skill", { id: "interaction-skill", options: { getString: vi.fn((name: string) => name === "command" ? "test-driven-development" : name === "input" ? "use TDD" : null) } });
+
+    await handleDiscordInteraction({ config, store, runner }, interaction);
+
+    expect(store.nextQueued("thread1")).toMatchObject({ content: "/skill:test-driven-development use TDD" });
+    expect(runner.poke).toHaveBeenCalledWith("thread1");
+    store.close();
+  });
+
+  it("autocompletes namespace ACP commands", async () => {
+    const config = normalizeConfig({ discord: { guilds: [{ id: "guild1", allowedChannels: ["chan1"], allowedUsers: ["user1"] }], slashCommands: { acpCommands: [
+      { name: "skill:test-driven-development", description: "TDD" },
+      { name: "skill:writing-plans", description: "Plans" },
+    ] } } });
+    const store = new BridgeStore(":memory:");
+    const interaction: any = {
+      commandName: "skill",
+      guildId: "guild1",
+      options: { getFocused: vi.fn(() => "test") },
+      isAutocomplete: () => true,
+      isChatInputCommand: () => false,
+      respond: vi.fn(async (_choices: any) => undefined),
+    };
+
+    await handleDiscordInteraction({ config, store, runner: {} as any }, interaction);
+
+    expect(interaction.respond).toHaveBeenCalledWith([{ name: "test-driven-development", value: "test-driven-development" }]);
     store.close();
   });
 

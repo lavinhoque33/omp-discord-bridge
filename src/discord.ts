@@ -6,7 +6,7 @@ import type { BridgeStore } from "./store.js";
 import { findGuildPolicy } from "./config.js";
 import { slugifyThreadName, stripBotMention } from "./render.js";
 import { parseThreadCommand, type ThreadQueueRunner } from "./queue.js";
-import { discordCommandNameForAcpCommand } from "./slash-commands.js";
+import { acpAutocompleteChoices, resolveAcpSlashPrompt } from "./slash-commands.js";
 
 export class DiscordThreadMessenger {
   constructor(private client: Client) {}
@@ -119,12 +119,18 @@ function promptOption(interaction: ChatInputCommandInteraction): string | null {
 }
 
 export async function handleDiscordInteraction(deps: { config: BridgeConfig; store: BridgeStore; runner: ThreadQueueRunner }, interaction: Interaction): Promise<void> {
+  if (!deps.config.discord.slashCommands.enabled) return;
+  if (interaction.isAutocomplete()) {
+    const focused = String(interaction.options.getFocused() ?? "");
+    const choices = acpAutocompleteChoices(deps.config, interaction.commandName, focused);
+    if (choices.length > 0) await interaction.respond(choices);
+    return;
+  }
   if (!interaction.isChatInputCommand() || !interaction.guildId) return;
 
-  if (!deps.config.discord.slashCommands.enabled) return;
   const command = bridgeInteractionCommand(deps.config.discord.slashCommands.commandPrefix, interaction.commandName);
-  const acpCommand = deps.config.discord.slashCommands.acpCommands.find((candidate) => discordCommandNameForAcpCommand(deps.config, candidate) === interaction.commandName);
-  if (!command && !acpCommand) return;
+  const acpPrompt = resolveAcpSlashPrompt(deps.config, interaction.commandName, (name) => interaction.options.getString(name));
+  if (!command && !acpPrompt) return;
 
   const existing = deps.store.getSession(interaction.channelId);
   const policy = findGuildPolicy(deps.config, interaction.guildId);
@@ -141,9 +147,9 @@ export async function handleDiscordInteraction(deps: { config: BridgeConfig; sto
     return;
   }
 
-  if (command === "prompt" || acpCommand) {
-    const rawInput = (acpCommand ? interaction.options.getString("input") : promptOption(interaction))?.trim() ?? "";
-    const prompt = acpCommand ? `/${acpCommand.name}${rawInput ? ` ${rawInput}` : ""}` : rawInput;
+  if (command === "prompt" || acpPrompt) {
+    const rawInput = acpPrompt ?? promptOption(interaction)?.trim() ?? "";
+    const prompt = rawInput;
     if (!prompt) {
       await interaction.editReply({ content: "A prompt is required for this slash command." });
       return;

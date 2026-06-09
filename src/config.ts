@@ -30,14 +30,20 @@ function asOptionalString(value: unknown, fallback: string, field: string): stri
   return value;
 }
 
+function normalizeAcpCommandMode(value: unknown): BridgeConfig["discord"]["slashCommands"]["acpCommandMode"] {
+  if (value === "auto" || value === "core") return value;
+  return "explicit";
+}
+
 function normalizeAcpCommands(value: unknown): BridgeConfig["discord"]["slashCommands"]["acpCommands"] {
   if (value == null) return [];
+  if (value === "auto" || value === "core") return [];
   if (!Array.isArray(value)) throw new Error("discord.slashCommands.acpCommands must be an array");
   return value.map((command, index) => {
     if (!command || typeof command !== "object") throw new Error(`discord.slashCommands.acpCommands[${index}] must be an object`);
     const item = command as Record<string, unknown>;
     const name = asOptionalString(item.name, "", `discord.slashCommands.acpCommands[${index}].name`);
-    if (!/^[a-z0-9_-]{1,32}$/.test(name)) throw new Error(`discord.slashCommands.acpCommands[${index}].name must be 1-32 lowercase command chars`);
+    if (!/^[a-z0-9_:-]{1,128}$/.test(name)) throw new Error(`discord.slashCommands.acpCommands[${index}].name must be 1-128 lowercase ACP command chars`);
     return {
       name,
       description: asOptionalString(item.description, `Run OMP /${name}`, `discord.slashCommands.acpCommands[${index}].description`),
@@ -84,6 +90,7 @@ export function normalizeConfig(raw: unknown): BridgeConfig {
         enabled: asOptionalBoolean(slashCommands.enabled, true, "discord.slashCommands.enabled"),
         syncOnStart: asOptionalBoolean(slashCommands.syncOnStart, true, "discord.slashCommands.syncOnStart"),
         commandPrefix: normalizeSlashCommandPrefix(slashCommands.commandPrefix),
+        acpCommandMode: normalizeAcpCommandMode(slashCommands.acpCommands),
         acpCommands: normalizeAcpCommands(slashCommands.acpCommands),
       },
     },

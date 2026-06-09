@@ -10,7 +10,7 @@ A Hermes-style Discord gateway for [OMP / Oh My Pi](https://omp.sh/): mention a 
 - Per-thread serial queues plus configurable global concurrency.
 - OMP RPC-mode adapter that launches `omp --mode rpc` via Bun by default, plus configurable `omp.mode: acp` using the official `@agentclientprotocol/sdk` client and legacy `omp.mode: sdk` fallback.
 - Thread controls: `status`, `/status`, `stop`, `/stop`, `new`, `/new`, `compact`, `/compact`.
-- Guild slash commands synced by the daemon on startup: `/omp prompt:<text>`, `/omp-status`, `/omp-stop`, `/omp-new`, `/omp-compact`, plus configured ACP slash-command passthroughs like `/omp-todo input:<args>`.
+- Guild slash commands synced by the daemon on startup: `/omp prompt:<text>`, `/omp-status`, `/omp-stop`, `/omp-new`, `/omp-compact`, plus OMP ACP commands without an `omp-` prefix such as `/todo input:<args>` and namespace runners like `/skill command:<autocomplete> input:<args>`.
 - Message chunking under Discord limits.
 - Conservative attachment prompt inclusion with max-byte policy.
 - OMP package manifest already exposes the OMP extension entrypoint (`dist/src/extension.js`) for OMP to load.
@@ -43,7 +43,7 @@ omp-discord-bridge --config ~/.omp/agent/discord-bridge.yml
 
 See `examples/discord-bridge.yml`.
 
-Secrets stay in env vars; config stores `tokenEnv`, guild/channel IDs, slash-command defaults, OMP mode/cwd/session root, and runtime limits. `omp.mode` defaults to `rpc`; set `omp.mode: acp` to run OMP through Agent Client Protocol or `omp.mode: sdk` only for the legacy in-process SDK adapter. `runtime.followupMode` defaults to `steer`; set it to `queue` to preserve queued follow-ups. Configure `discord.slashCommands.acpCommands` to expose OMP/ACP commands as Discord slash commands; the bridge sends those as `/command <input>` prompts to OMP.
+Secrets stay in env vars; config stores `tokenEnv`, guild/channel IDs, slash-command defaults, OMP mode/cwd/session root, and runtime limits. `omp.mode` defaults to `rpc`; set `omp.mode: acp` to run OMP through Agent Client Protocol or `omp.mode: sdk` only for the legacy in-process SDK adapter. `runtime.followupMode` defaults to `steer`; set it to `queue` to preserve queued follow-ups. Configure `discord.slashCommands.acpCommands: auto` to expose every discovered OMP/ACP command: safe core commands are registered directly (`/todo`, `/model`, `/tools`), and namespaced commands are available through direct namespace runners (`/skill`, `/codex`, `/posthog`, etc.) with autocomplete. Explicit arrays are still supported. The bridge sends slash invocations as `/command <input>` prompts to OMP.
 
 ## Testing
 

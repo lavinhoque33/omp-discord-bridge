@@ -4,12 +4,9 @@ discord:
     enabled: true
     syncOnStart: true
     commandPrefix: omp
-    # Optional: expose ACP/OMP slash commands as Discord commands.
-    # Requires omp.mode: acp for true ACP command handling; commands are sent as /<name> <input>.
-    acpCommands:
-      - name: todo
-        description: Manage OMP todos
-        inputHint: todo arguments
+    # Expose every discovered OMP/ACP command. Safe core commands register directly
+    # (/todo, /model, /tools); namespaced commands use runners like /skill and /codex.
+    acpCommands: auto
   guilds:
     - id: "123456789012345678"
       allowedChannels: ["234567890123456789"]
