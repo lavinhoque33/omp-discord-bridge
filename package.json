@@ -1,0 +1,37 @@
+{
+  "name": "omp-discord-hermes-bridge",
+  "version": "0.1.0",
+  "description": "Hermes-style Discord gateway daemon and OMP extension for persistent per-thread OMP sessions.",
+  "type": "module",
+  "bin": {
+    "omp-discord-bridge": "./dist/src/daemon.js"
+  },
+  "omp": {
+    "extensions": ["./dist/src/extension.js"]
+  },
+  "exports": {
+    ".": "./dist/src/index.js",
+    "./daemon": "./dist/src/daemon.js",
+    "./extension": "./dist/src/extension.js"
+  },
+  "files": ["dist", "README.md", "examples"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/src/daemon.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@oh-my-pi/pi-coding-agent": "^15.10.7",
+    "discord.js": "^14.24.2",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}
