@@ -1,7 +1,7 @@
 {
   "name": "omp-discord-hermes-bridge",
   "version": "0.1.0",
-  "description": "Hermes-style Discord gateway daemon and OMP extension for persistent per-thread OMP sessions.",
+  "description": "Discord gateway daemon for persistent per-thread OMP agent sessions.",
   "type": "module",
   "bin": {
     "omp-discord-bridge": "./dist/src/daemon.js"
@@ -19,7 +19,9 @@
   "files": [
     "dist",
     "README.md",
-    "examples"
+    "examples",
+    "LICENSE",
+    "docs"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/src/daemon.js",
@@ -41,5 +43,28 @@
   },
   "engines": {
     "node": ">=24.0.0"
+  },
+  "license": "MIT",
+  "author": "Carter McAlister",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CarterMcAlister/omp-discord-hermes-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/CarterMcAlister/omp-discord-hermes-bridge/issues"
+  },
+  "homepage": "https://github.com/CarterMcAlister/omp-discord-hermes-bridge#readme",
+  "keywords": [
+    "omp",
+    "oh-my-pi",
+    "discord",
+    "bot",
+    "agent",
+    "hermes",
+    "acp",
+    "agent-client-protocol"
+  ],
+  "overrides": {
+    "tar": "^7.5.16"
   }
 }
