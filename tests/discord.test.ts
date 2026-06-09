@@ -1,6 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { MessageFlags } from "discord.js";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeConfig } from "../src/config.js";
 import { BridgeStore } from "../src/store.js";
@@ -116,7 +117,7 @@ describe("Discord orchestration", () => {
 
     await handleDiscordInteraction({ config, store, runner }, interaction);
 
-    expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     const queued = store.nextQueued("thread1");
     expect(queued).toMatchObject({ threadId: "thread1", discordMessageId: "interaction1", authorId: "user1", content: "run the tool" });
     expect(runner.poke).toHaveBeenCalledWith("thread1");
@@ -185,7 +186,7 @@ describe("Discord orchestration", () => {
 
     await handleDiscordInteraction({ config, store, runner }, interaction);
 
-    expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(runner.status).toHaveBeenCalledWith("thread1");
     expect(interaction.editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/status/i) }));
     store.close();
@@ -201,7 +202,7 @@ describe("Discord orchestration", () => {
 
     await handleDiscordInteraction({ config, store, runner }, interaction);
 
-    expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/not allowed/i), ephemeral: true }));
+    expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/not allowed/i), flags: MessageFlags.Ephemeral }));
     expect(store.counts("thread1")).toEqual({ queued: 0, running: 0 });
     expect(runner.poke).not.toHaveBeenCalled();
     store.close();

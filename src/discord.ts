@@ -1,4 +1,4 @@
-import { ChannelType, Client, GatewayIntentBits, Partials, type ChatInputCommandInteraction, type Interaction, type Message } from "discord.js";
+import { ChannelType, Client, GatewayIntentBits, MessageFlags, Partials, type ChatInputCommandInteraction, type Interaction, type Message } from "discord.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { BridgeConfig, GuildPolicy } from "./types.js";
@@ -136,11 +136,11 @@ export async function handleDiscordInteraction(deps: { config: BridgeConfig; sto
   const policy = findGuildPolicy(deps.config, interaction.guildId);
   const principal = { channelId: existing?.parentChannelId ?? interaction.channelId, userId: interaction.user.id };
   if (!policy || !isAllowed(policy, principal)) {
-    await interaction.reply({ content: "You are not allowed to use this OMP bridge command here.", ephemeral: true });
+    await interaction.reply({ content: "You are not allowed to use this OMP bridge command here.", flags: MessageFlags.Ephemeral });
     return;
   }
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   if (!existing) {
     await interaction.editReply({ content: "Slash commands must be used in an OMP-managed thread." });
