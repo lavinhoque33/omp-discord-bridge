@@ -3,8 +3,9 @@ import process from "node:process";
 import { loadConfig } from "./config.js";
 import { BridgeStore } from "./store.js";
 import { ThreadQueueRunner } from "./queue.js";
-import { SdkOmpSessionFactory } from "./omp-session.js";
+import { RpcOmpSessionFactory, SdkOmpSessionFactory } from "./omp-session.js";
 import { createDiscordClient, DiscordThreadMessenger, handleDiscordMessage } from "./discord.js";
+import type { OmpSessionFactory } from "./types.js";
 
 function arg(name: string, fallback?: string): string | undefined {
   const idx = process.argv.indexOf(name);
@@ -19,11 +20,12 @@ export async function startDaemon(configPath: string): Promise<{ stop(): Promise
   const store = new BridgeStore(config.runtime.databasePath);
   store.recoverRunning();
   const messenger = new DiscordThreadMessenger(client);
-  const runner = new ThreadQueueRunner({ store, omp: new SdkOmpSessionFactory(), messenger, messageLimit: config.runtime.discordMessageLimit, maxConcurrency: config.runtime.maxConcurrency });
+  const omp: OmpSessionFactory = config.omp.mode === "sdk" ? new SdkOmpSessionFactory() : new RpcOmpSessionFactory();
+  const runner = new ThreadQueueRunner({ store, omp, messenger, messageLimit: config.runtime.discordMessageLimit, maxConcurrency: config.runtime.maxConcurrency });
   client.on("messageCreate", (message) => { void handleDiscordMessage({ config, store, runner }, message).catch((error) => console.error("message handling failed", error)); });
   await client.login(token);
   console.log(`OMP Discord bridge logged in as ${client.user?.tag ?? client.user?.id ?? "unknown bot"}`);
-  return { stop: async () => { await client.destroy(); store.close(); } };
+  return { stop: async () => { await client.destroy(); omp.close?.(); store.close(); } };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -8,7 +8,7 @@ A Hermes-style Discord gateway for [OMP / Oh My Pi](https://omp.sh/): mention a 
 - Mention-triggered thread creation from parent channels.
 - One Discord thread ↔ one OMP session mapping persisted in SQLite (`node:sqlite`).
 - Per-thread serial queues plus configurable global concurrency.
-- OMP SDK adapter using `@oh-my-pi/pi-coding-agent` (`createAgentSession`, `SessionManager.create`, discovered auth/models).
+- OMP RPC-mode adapter that launches `omp --mode rpc` via Bun by default, with a legacy SDK adapter available through `omp.mode: sdk`.
 - Thread controls: `status`, `/status`, `stop`, `/stop`, `new`, `/new`, `compact`, `/compact`.
 - Message chunking under Discord limits.
 - Conservative attachment prompt inclusion with max-byte policy.
@@ -42,7 +42,7 @@ omp-discord-bridge --config ~/.omp/agent/discord-bridge.yml
 
 See `examples/discord-bridge.yml`.
 
-Secrets stay in env vars; config stores `tokenEnv`, guild/channel IDs, OMP cwd/session root, and runtime limits.
+Secrets stay in env vars; config stores `tokenEnv`, guild/channel IDs, OMP mode/cwd/session root, and runtime limits. `omp.mode` defaults to `rpc`; set `omp.mode: sdk` only to use the legacy in-process SDK adapter.
 
 ## Testing
 

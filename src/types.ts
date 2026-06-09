@@ -16,6 +16,7 @@ export interface BridgeConfig {
     guilds: GuildPolicy[];
   };
   omp: {
+    mode: "rpc" | "sdk";
     cwd: string;
     sessionRoot: string;
     model: string | null;
@@ -75,6 +76,7 @@ export interface OmpSessionHandle {
 export interface OmpSessionFactory {
   open(record: DiscordSessionRecord): Promise<OmpSessionHandle>;
   newSession(record: DiscordSessionRecord): Promise<OmpSessionHandle>;
+  close?(): Promise<void> | void;
 }
 
 export interface ThreadMessenger {
