@@ -54,6 +54,10 @@ export async function handleDiscordMessage(deps: { config: BridgeConfig; store: 
     if (command === "compact") return deps.runner.compact(message.channelId);
     const attachments = attachmentSummaries(message, deps.config.runtime.maxAttachmentBytes);
     deps.store.enqueue({ threadId: message.channelId, discordMessageId: message.id, authorId: message.author.id, content: promptWithAttachments(message.content.trim(), attachments), attachments });
+    const counts = deps.store.counts(message.channelId);
+    if (message.channel.isTextBased() && "send" in message.channel) {
+      await message.channel.send({ content: `Queued OMP turn. Current backlog: ${counts.running} running, ${counts.queued} queued. Use \`status\` to inspect or \`stop\` to abort the running turn.` });
+    }
     deps.runner.poke(message.channelId);
     return;
   }

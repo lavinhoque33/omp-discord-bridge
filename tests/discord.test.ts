@@ -42,4 +42,21 @@ describe("Discord orchestration", () => {
     expect(sent[0]).toBe("echo: hello bridge");
     store.close();
   });
+
+  it("acknowledges follow-up prompts in existing threads immediately", async () => {
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "bridge-discord-"));
+    const config = normalizeConfig({ discord: { guilds: [{ id: "guild1", allowedChannels: ["chan1"], allowedUsers: ["user1"] }] }, omp: { cwd: tmp, sessionRoot: path.join(tmp, "sessions") }, runtime: { databasePath: path.join(tmp, "db.sqlite") } });
+    const store = new BridgeStore(config.runtime.databasePath);
+    store.createSession({ threadId: "thread1", guildId: "guild1", parentChannelId: "chan1", triggerMessageId: "msg0", sessionFile: null, sessionDir: path.join(tmp, "sessions/thread1"), cwd: tmp, model: null, thinkingLevel: null, createdByUserId: "user1" });
+    const runner = new ThreadQueueRunner({ store, omp: new FakeOmpSessionFactory(), messenger: { send: async () => undefined }, messageLimit: 1900, maxConcurrency: 1 });
+    const channelSend = vi.fn(async (_msg: any) => undefined);
+    const { msg } = fakeMessage("do the next thing", { id: "msg2", channelId: "thread1", channel: { isTextBased: () => true, type: 0, send: channelSend }, mentions: { users: new Map() } });
+
+    await handleDiscordMessage({ config, store, runner }, msg);
+
+    expect(channelSend).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("Queued OMP turn") }));
+    expect(store.counts("thread1").queued + store.counts("thread1").running).toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    store.close();
+  });
 });
