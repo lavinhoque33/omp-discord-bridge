@@ -95,7 +95,6 @@ export function normalizeConfig(raw: unknown): BridgeConfig {
       },
     },
     omp: {
-      mode: omp.mode ?? "rpc",
       cwd: expandHome(omp.cwd ?? process.cwd()),
       sessionRoot: expandHome(omp.sessionRoot ?? "~/.omp/agent/discord-sessions"),
       model: omp.model ?? null,
@@ -112,7 +111,7 @@ export function normalizeConfig(raw: unknown): BridgeConfig {
   };
   if (typeof cfg.discord.tokenEnv !== "string" || cfg.discord.tokenEnv.length === 0) throw new Error("discord.tokenEnv is required");
   if (!["steer", "queue"].includes(cfg.runtime.followupMode)) throw new Error("runtime.followupMode must be either steer or queue");
-  if (!["rpc", "sdk", "acp"].includes(cfg.omp.mode)) throw new Error("omp.mode must be rpc, sdk, or acp");
+  if (omp.mode && omp.mode !== "acp") throw new Error("omp.mode has been removed; the bridge only supports ACP mode");
   if (!Number.isInteger(cfg.runtime.maxConcurrency) || cfg.runtime.maxConcurrency < 1) throw new Error("runtime.maxConcurrency must be >= 1");
   if (!Number.isInteger(cfg.runtime.maxAttachmentBytes) || cfg.runtime.maxAttachmentBytes < 0) throw new Error("runtime.maxAttachmentBytes must be >= 0");
   if (!Number.isInteger(cfg.runtime.discordMessageLimit) || cfg.runtime.discordMessageLimit < 100 || cfg.runtime.discordMessageLimit > 2000) {

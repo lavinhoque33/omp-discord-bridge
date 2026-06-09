@@ -14,7 +14,6 @@ discord:
       requireMention: true
       threadAutoArchiveMinutes: 1440
 omp:
-  mode: rpc # rpc | acp | sdk
   cwd: "~/Developer"
   sessionRoot: "~/.omp/agent/discord-sessions"
   model: null

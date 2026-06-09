@@ -31,7 +31,6 @@ export interface BridgeConfig {
     slashCommands: DiscordSlashCommandConfig;
   };
   omp: {
-    mode: "rpc" | "sdk" | "acp";
     cwd: string;
     sessionRoot: string;
     model: string | null;

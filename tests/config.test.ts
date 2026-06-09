@@ -7,7 +7,6 @@ describe("config", () => {
     expect(cfg.discord.tokenEnv).toBe("DISCORD_BOT_TOKEN");
     expect(cfg.discord.guilds[0]?.requireMention).toBe(true);
     expect(cfg.omp.cwd).toContain("Developer");
-    expect(cfg.omp.mode).toBe("rpc");
     expect(cfg.runtime.followupMode).toBe("steer");
     expect(cfg.runtime.maxConcurrency).toBe(2);
     expect(cfg.discord).toMatchObject({ slashCommands: { enabled: true, syncOnStart: true, commandPrefix: "omp" } });
@@ -23,15 +22,12 @@ describe("config", () => {
     const cfg = normalizeConfig({ discord: { guilds: [{ id: "g" }], slashCommands: { enabled: false, syncOnStart: false, commandPrefix: "pi" } } });
     expect(cfg.discord).toMatchObject({ slashCommands: { enabled: false, syncOnStart: false, commandPrefix: "pi" } });
   });
-  it("allows selecting ACP session mode", () => {
+  it("accepts the deprecated ACP session mode value as a no-op", () => {
     const cfg = normalizeConfig({ discord: { guilds: [{ id: "g" }] }, omp: { mode: "acp" } });
-    expect(cfg.omp.mode).toBe("acp");
+    expect(cfg.omp.cwd).toBe(process.cwd());
   });
-  it("allows explicitly selecting the legacy sdk session mode", () => {
-    const cfg = normalizeConfig({ discord: { guilds: [{ id: "g", allowedChannels: ["c"] }] }, omp: { mode: "sdk" }, runtime: {} });
-    expect(cfg.omp.mode).toBe("sdk");
-  });
-  it("rejects unknown OMP session modes", () => {
+  it("rejects removed OMP session modes", () => {
+    expect(() => normalizeConfig({ discord: { guilds: [{ id: "g" }] }, omp: { mode: "sdk" } })).toThrow(/only supports ACP/);
     expect(() => normalizeConfig({ discord: { guilds: [{ id: "g" }] }, omp: { mode: "bogus" } })).toThrow(/omp.mode/);
   });
   it("supports auto ACP slash command discovery mode", () => {

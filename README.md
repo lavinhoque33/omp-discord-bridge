@@ -2,7 +2,7 @@
 
 A production-ready Discord gateway for [OMP / Oh My Pi](https://omp.sh/). Mention your bot in an allowed Discord channel and the bridge creates a dedicated thread backed by a persistent OMP agent session. Follow-up messages, slash commands, stop/status controls, and attachments all stay scoped to that thread.
 
-The project is intentionally small: a Node.js daemon, a SQLite queue/store, Discord slash-command sync, and adapters for OMP RPC/ACP sessions.
+The project is intentionally small: a Node.js daemon, a SQLite queue/store, Discord slash-command sync, and an ACP-only OMP session adapter.
 
 ## Highlights
 
@@ -26,7 +26,7 @@ Approval forwarding is intentionally out of scope: the ACP adapter currently aut
 2. The daemon creates a thread named from the prompt.
 3. The thread/session mapping is stored in SQLite.
 4. Prompts from that thread are serialized through a per-thread queue.
-5. The selected OMP adapter runs the prompt and streams the final response back to Discord.
+5. The OMP ACP adapter runs the prompt and streams the final response back to Discord.
 6. Later thread messages continue the same OMP session until `new`, `stop`, or daemon cleanup.
 
 ## Slash-command model
@@ -53,7 +53,7 @@ Bridge/session commands remain prefixed to avoid collisions:
 ## Requirements
 
 - Node.js **24+** (`node:sqlite` is used directly).
-- Bun available on `PATH` for the default OMP RPC/ACP process launch.
+- OMP available as `omp` on `PATH` (or set `OMP_CLI_PATH` to the executable).
 - A Discord bot token.
 - Discord bot settings:
   - Message Content Intent enabled.
@@ -110,7 +110,6 @@ discord:
       requireMention: true
       threadAutoArchiveMinutes: 1440
 omp:
-  mode: rpc # rpc | acp | sdk
   cwd: "~/Developer"
   sessionRoot: "~/.omp/agent/discord-sessions"
   model: null
@@ -134,7 +133,6 @@ runtime:
 | `discord.guilds[].requireMention` | Require a bot mention to start a new thread. |
 | `discord.slashCommands.syncOnStart` | Replace guild slash commands with the generated command set on daemon startup. |
 | `discord.slashCommands.acpCommands` | `auto`, `core`, or an explicit array of ACP command metadata. |
-| `omp.mode` | `rpc` is the default process adapter; `acp` uses Agent Client Protocol; `sdk` is a legacy in-process adapter. |
 | `omp.cwd` | Working directory used for OMP sessions. |
 | `omp.sessionRoot` | Directory where per-thread OMP session directories are created. |
 | `runtime.followupMode` | `steer` sends follow-ups into the running turn when possible; `queue` always queues. |
@@ -186,7 +184,7 @@ The test suite covers:
 - slash-command generation and ACP namespace routing;
 - SQLite session and queue persistence;
 - queue serialization, stop/new-session controls, and response rendering;
-- OMP RPC/ACP launch helpers and fake session behavior.
+- OMP ACP launch helpers and fake session behavior.
 
 ## Repository layout
 
@@ -194,7 +192,7 @@ The test suite covers:
 src/config.ts          YAML loading, defaults, validation
 src/daemon.ts          daemon startup, Discord login, slash sync
 src/discord.ts         Discord event handlers and permission checks
-src/omp-session.ts     OMP RPC, ACP, SDK, and fake session adapters
+src/omp-session.ts     OMP ACP and fake session adapters
 src/queue.ts           per-thread queue runner and controls
 src/render.ts          message chunking/thread-name rendering
 src/slash-commands.ts  slash command generation/autocomplete/routing
