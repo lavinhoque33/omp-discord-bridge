@@ -24,6 +24,7 @@ export async function startDaemon(configPath: string): Promise<{ stop(): Promise
   const runner = new ThreadQueueRunner({ store, omp, messenger, messageLimit: config.runtime.discordMessageLimit, maxConcurrency: config.runtime.maxConcurrency });
   client.on("messageCreate", (message) => { void handleDiscordMessage({ config, store, runner }, message).catch((error) => console.error("message handling failed", error)); });
   await client.login(token);
+  for (const threadId of store.queuedThreadIds()) runner.poke(threadId);
   console.log(`OMP Discord bridge logged in as ${client.user?.tag ?? client.user?.id ?? "unknown bot"}`);
   return { stop: async () => { await client.destroy(); omp.close?.(); store.close(); } };
 }

@@ -17,6 +17,7 @@ describe("BridgeStore", () => {
     expect(s.counts("t")).toEqual({ queued: 0, running: 1 });
     expect(s.recoverRunning()).toBe(1);
     expect(s.counts("t")).toEqual({ queued: 1, running: 0 });
+    expect(s.queuedThreadIds()).toEqual(["t"]);
     s.close();
   });
 });

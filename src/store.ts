@@ -123,6 +123,10 @@ export class BridgeStore {
     const running = this.db.prepare("SELECT count(*) AS n FROM queued_messages WHERE thread_id=? AND status='running'").get(threadId) as any;
     return { queued: Number(queued.n), running: Number(running.n) };
   }
+  queuedThreadIds(): string[] {
+    const rows = this.db.prepare("SELECT DISTINCT thread_id FROM queued_messages WHERE status='queued' ORDER BY thread_id").all() as any[];
+    return rows.map((row) => String(row.thread_id));
+  }
   recoverRunning(): number {
     const result = this.db.prepare("UPDATE queued_messages SET status='queued', started_at=NULL, error='recovered after daemon restart' WHERE status='running'").run();
     return Number(result.changes ?? 0);
