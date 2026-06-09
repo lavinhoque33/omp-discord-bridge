@@ -19,6 +19,16 @@ export class ThreadQueueRunner {
     await this.deps.messenger.send(threadId, "Stopped current OMP turn and paused this thread session. Use `new` to start a fresh session.");
   }
 
+  async steer(threadId: string, content: string): Promise<boolean> {
+    if (!this.runningThreads.has(threadId)) return false;
+    const session = this.deps.store.getSession(threadId);
+    if (!session || session.status !== "active") return false;
+    const handle = await this.deps.omp.open(session);
+    if (!handle.steer) return false;
+    await handle.steer(content);
+    return true;
+  }
+
   async status(threadId: string): Promise<void> {
     const session = this.deps.store.getSession(threadId);
     if (!session) return this.deps.messenger.send(threadId, "No OMP session is mapped to this thread.");

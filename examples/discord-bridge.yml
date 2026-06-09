@@ -1,5 +1,15 @@
 discord:
   tokenEnv: DISCORD_BOT_TOKEN
+  slashCommands:
+    enabled: true
+    syncOnStart: true
+    commandPrefix: omp
+    # Optional: expose ACP/OMP slash commands as Discord commands.
+    # Requires omp.mode: acp for true ACP command handling; commands are sent as /<name> <input>.
+    acpCommands:
+      - name: todo
+        description: Manage OMP todos
+        inputHint: todo arguments
   guilds:
     - id: "123456789012345678"
       allowedChannels: ["234567890123456789"]
@@ -7,7 +17,7 @@ discord:
       requireMention: true
       threadAutoArchiveMinutes: 1440
 omp:
-  mode: rpc
+  mode: rpc # rpc | acp | sdk
   cwd: "~/Developer"
   sessionRoot: "~/.omp/agent/discord-sessions"
   model: null
@@ -17,4 +27,5 @@ runtime:
   maxConcurrency: 2
   maxAttachmentBytes: 25000000
   responseMode: edit-preview-then-final
+  followupMode: steer # steer | queue
   discordMessageLimit: 1900

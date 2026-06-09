@@ -10,13 +10,27 @@ export interface GuildPolicy {
   cwd?: string;
 }
 
+export interface BridgeAvailableCommand {
+  name: string;
+  description: string;
+  inputHint?: string;
+}
+
+export interface DiscordSlashCommandConfig {
+  enabled: boolean;
+  syncOnStart: boolean;
+  commandPrefix: string;
+  acpCommands: BridgeAvailableCommand[];
+}
+
 export interface BridgeConfig {
   discord: {
     tokenEnv: string;
     guilds: GuildPolicy[];
+    slashCommands: DiscordSlashCommandConfig;
   };
   omp: {
-    mode: "rpc" | "sdk";
+    mode: "rpc" | "sdk" | "acp";
     cwd: string;
     sessionRoot: string;
     model: string | null;
@@ -27,6 +41,7 @@ export interface BridgeConfig {
     maxConcurrency: number;
     maxAttachmentBytes: number;
     responseMode: "final-only" | "edit-preview-then-final";
+    followupMode: "steer" | "queue";
     discordMessageLimit: number;
   };
 }
@@ -69,6 +84,8 @@ export interface OmpPromptResult {
 export interface OmpSessionHandle {
   id: string;
   prompt(message: string, signal?: AbortSignal): Promise<OmpPromptResult>;
+  steer?(message: string): Promise<void> | void;
+  availableCommands?(): Promise<BridgeAvailableCommand[]> | BridgeAvailableCommand[];
   abort?(): Promise<void> | void;
   compact?(): Promise<void> | void;
 }

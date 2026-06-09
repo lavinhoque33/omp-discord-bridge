@@ -1,8 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { Readable, Writable } from "node:stream";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import readline from "node:readline";
+import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type AvailableCommand, type Client as AcpClient, type SessionNotification } from "@agentclientprotocol/sdk";
 import type { DiscordSessionRecord, OmpSessionFactory, OmpSessionHandle, OmpPromptResult } from "./types.js";
 
 type PendingRpc = { resolve(value: any): void; reject(error: Error): void; timer: NodeJS.Timeout };
@@ -32,8 +34,8 @@ export function resolveOmpCliPath(): string {
   throw new Error("Unable to locate @oh-my-pi/pi-coding-agent/src/cli.ts for RPC mode");
 }
 
-export function buildRpcLaunch(input: RpcLaunchInput): RpcLaunch {
-  const args = [input.cliPath ?? resolveOmpCliPath(), "--mode", "rpc", "--session-dir", input.sessionDir];
+function buildOmpLaunch(input: RpcLaunchInput, mode: "rpc" | "acp"): RpcLaunch {
+  const args = [input.cliPath ?? resolveOmpCliPath(), "--mode", mode, "--session-dir", input.sessionDir];
   if (input.model) args.push("--model", input.model);
   return {
     command: "bun",
@@ -47,6 +49,9 @@ export function buildRpcLaunch(input: RpcLaunchInput): RpcLaunch {
     } as Record<string, string>,
   };
 }
+
+export function buildRpcLaunch(input: RpcLaunchInput): RpcLaunch { return buildOmpLaunch(input, "rpc"); }
+export function buildAcpLaunch(input: RpcLaunchInput): RpcLaunch { return buildOmpLaunch(input, "acp"); }
 
 function extractTextDelta(event: any): string {
   if (event?.type !== "message_update") return "";
@@ -90,6 +95,11 @@ class RpcProcessSessionHandle implements OmpSessionHandle {
   async abort(): Promise<void> {
     if (!this.child) return;
     await this.send({ type: "abort" }, 5_000).catch(() => undefined);
+  }
+
+  async steer(message: string): Promise<void> {
+    await this.start();
+    await this.send({ type: "steer", message }, 30_000);
   }
 
   async compact(): Promise<void> {
@@ -231,6 +241,100 @@ export class RpcOmpSessionFactory implements OmpSessionFactory {
     this.handles.clear();
   }
 }
+export class AcpOmpSessionFactory implements OmpSessionFactory {
+  private handles = new Map<string, AcpProcessSessionHandle>();
+  constructor(private options: { cliPath?: string; env?: Record<string, string> } = {}) {}
+  async open(record: DiscordSessionRecord): Promise<OmpSessionHandle> {
+    const cached = this.handles.get(record.threadId);
+    if (cached) return cached;
+    const handle = new AcpProcessSessionHandle(record, this.options);
+    this.handles.set(record.threadId, handle);
+    return handle;
+  }
+  async newSession(record: DiscordSessionRecord): Promise<OmpSessionHandle> {
+    this.handles.get(record.threadId)?.close();
+    this.handles.delete(record.threadId);
+    return this.open(record);
+  }
+  close(): void {
+    for (const handle of this.handles.values()) handle.close();
+    this.handles.clear();
+  }
+}
+
+class AcpProcessSessionHandle implements OmpSessionHandle {
+  private child: ChildProcessWithoutNullStreams | null = null;
+  private connection: ClientSideConnection | null = null;
+  private sessionId: string | null = null;
+  private ready: Promise<void> | null = null;
+  private textBuffer = "";
+  private commands: AvailableCommand[] = [];
+
+  constructor(private record: DiscordSessionRecord, private options: { cliPath?: string; env?: Record<string, string> } = {}) {}
+
+  get id(): string { return this.record.threadId; }
+
+  async prompt(message: string, signal?: AbortSignal): Promise<OmpPromptResult> {
+    await this.start();
+    if (!this.connection || !this.sessionId) throw new Error("ACP session not ready");
+    this.textBuffer = "";
+    if (signal?.aborted) throw new Error("aborted");
+    const abort = () => { void this.abort(); };
+    signal?.addEventListener("abort", abort, { once: true });
+    try {
+      await this.connection.prompt({ sessionId: this.sessionId, prompt: [{ type: "text", text: message }] });
+      return { text: this.textBuffer || "(OMP completed without text output)", sessionFile: path.join(this.record.sessionDir, `${this.record.threadId}.json`) };
+    } finally {
+      signal?.removeEventListener("abort", abort);
+    }
+  }
+
+  async abort(): Promise<void> {
+    if (this.connection && this.sessionId) await this.connection.cancel({ sessionId: this.sessionId }).catch(() => undefined);
+  }
+
+  async availableCommands() {
+    await this.start();
+    return this.commands.map((command) => ({ name: command.name, description: command.description, ...(command.input?.hint ? { inputHint: command.input.hint } : {}) }));
+  }
+
+  close(): void {
+    this.child?.kill();
+    this.child = null;
+    this.connection = null;
+    this.sessionId = null;
+    this.ready = null;
+  }
+
+  private async start(): Promise<void> {
+    if (this.ready) return this.ready;
+    this.ready = this.openAcp();
+    return this.ready;
+  }
+
+  private async openAcp(): Promise<void> {
+    const launch = buildAcpLaunch({ cwd: this.record.cwd, sessionDir: this.record.sessionDir, model: this.record.model, thinkingLevel: this.record.thinkingLevel, ...(this.options.cliPath ? { cliPath: this.options.cliPath } : {}), ...(this.options.env ? { env: this.options.env } : {}) });
+    this.child = spawn(launch.command, launch.args, { cwd: launch.cwd, env: launch.env, stdio: ["pipe", "pipe", "pipe"] });
+    this.child.stderr.on("data", (chunk) => process.stderr.write(`[omp-acp:${this.record.threadId}] ${chunk}`));
+    const client: AcpClient = {
+      requestPermission: async (params) => ({ outcome: { outcome: "selected", optionId: params.options.find((option) => option.kind === "allow_once" || option.kind === "allow_always")?.optionId ?? params.options[0]?.optionId ?? "allow" } }),
+      sessionUpdate: async (params: SessionNotification) => { this.handleSessionUpdate(params); },
+    };
+    const stream = ndJsonStream(Writable.toWeb(this.child.stdin), Readable.toWeb(this.child.stdout));
+    this.connection = new ClientSideConnection(() => client, stream);
+    await this.connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+    const created = await this.connection.newSession({ cwd: this.record.cwd, mcpServers: [] });
+    this.sessionId = created.sessionId;
+  }
+
+  private handleSessionUpdate(params: SessionNotification): void {
+    if (this.sessionId && params.sessionId !== this.sessionId) return;
+    const update: any = params.update;
+    if (update?.sessionUpdate === "available_commands_update" && Array.isArray(update.availableCommands)) this.commands = update.availableCommands;
+    if (update?.sessionUpdate === "agent_message_chunk" && update.content?.type === "text" && typeof update.content.text === "string") this.textBuffer += update.content.text;
+  }
+}
+
 
 export class SdkOmpSessionFactory implements OmpSessionFactory {
   async open(record: DiscordSessionRecord): Promise<OmpSessionHandle> { return this.create(record); }
@@ -262,6 +366,7 @@ export class SdkOmpSessionFactory implements OmpSessionFactory {
           signal?.removeEventListener("abort", abort);
         }
       },
+      steer: (message) => session.steer?.(message),
       abort: () => session.abort?.(),
       compact: () => session.compact?.(),
     };
@@ -270,6 +375,7 @@ export class SdkOmpSessionFactory implements OmpSessionFactory {
 
 export class FakeOmpSessionFactory implements OmpSessionFactory {
   prompts: string[] = [];
+  steers: string[] = [];
   sessionsCreated = 0;
   constructor(private responder: (message: string) => string | Promise<string> = (message) => `echo: ${message}`) {}
   async open(record: DiscordSessionRecord): Promise<OmpSessionHandle> { return this.handle(record); }
@@ -282,6 +388,7 @@ export class FakeOmpSessionFactory implements OmpSessionFactory {
         this.prompts.push(message);
         return { text: await this.responder(message), sessionFile: path.join(record.sessionDir, `${record.threadId}.json`) };
       },
+      steer: async (message) => { this.steers.push(message); },
       abort: async () => undefined,
       compact: async () => undefined,
     };

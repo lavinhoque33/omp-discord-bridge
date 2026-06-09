@@ -18,12 +18,49 @@ function asStringArray(value: unknown, field: string): string[] {
   return value;
 }
 
+function asOptionalBoolean(value: unknown, fallback: boolean, field: string): boolean {
+  if (value == null) return fallback;
+  if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
+  return value;
+}
+
+function asOptionalString(value: unknown, fallback: string, field: string): string {
+  if (value == null) return fallback;
+  if (typeof value !== "string") throw new Error(`${field} must be a string`);
+  return value;
+}
+
+function normalizeAcpCommands(value: unknown): BridgeConfig["discord"]["slashCommands"]["acpCommands"] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error("discord.slashCommands.acpCommands must be an array");
+  return value.map((command, index) => {
+    if (!command || typeof command !== "object") throw new Error(`discord.slashCommands.acpCommands[${index}] must be an object`);
+    const item = command as Record<string, unknown>;
+    const name = asOptionalString(item.name, "", `discord.slashCommands.acpCommands[${index}].name`);
+    if (!/^[a-z0-9_-]{1,32}$/.test(name)) throw new Error(`discord.slashCommands.acpCommands[${index}].name must be 1-32 lowercase command chars`);
+    return {
+      name,
+      description: asOptionalString(item.description, `Run OMP /${name}`, `discord.slashCommands.acpCommands[${index}].description`),
+      ...(typeof item.inputHint === "string" ? { inputHint: item.inputHint } : {}),
+    };
+  });
+}
+
+function normalizeSlashCommandPrefix(value: unknown): string {
+  const commandPrefix = asOptionalString(value, "omp", "discord.slashCommands.commandPrefix");
+  if (!/^[a-z0-9_-]{1,20}$/.test(commandPrefix)) {
+    throw new Error("discord.slashCommands.commandPrefix must be 1-20 chars and contain only lowercase letters, numbers, hyphen, or underscore");
+  }
+  return commandPrefix;
+}
+
 export function normalizeConfig(raw: unknown): BridgeConfig {
   if (!raw || typeof raw !== "object") throw new Error("config must be an object");
   const data = raw as Record<string, any>;
   const discord = data.discord ?? {};
   const omp = data.omp ?? {};
   const runtime = data.runtime ?? {};
+  const slashCommands = discord.slashCommands ?? {};
   const guildsRaw = discord.guilds;
   if (!Array.isArray(guildsRaw) || guildsRaw.length === 0) {
     throw new Error("discord.guilds must contain at least one guild policy");
@@ -43,6 +80,12 @@ export function normalizeConfig(raw: unknown): BridgeConfig {
     discord: {
       tokenEnv: discord.tokenEnv ?? "DISCORD_BOT_TOKEN",
       guilds,
+      slashCommands: {
+        enabled: asOptionalBoolean(slashCommands.enabled, true, "discord.slashCommands.enabled"),
+        syncOnStart: asOptionalBoolean(slashCommands.syncOnStart, true, "discord.slashCommands.syncOnStart"),
+        commandPrefix: normalizeSlashCommandPrefix(slashCommands.commandPrefix),
+        acpCommands: normalizeAcpCommands(slashCommands.acpCommands),
+      },
     },
     omp: {
       mode: omp.mode ?? "rpc",
@@ -56,11 +99,13 @@ export function normalizeConfig(raw: unknown): BridgeConfig {
       maxConcurrency: runtime.maxConcurrency ?? 2,
       maxAttachmentBytes: runtime.maxAttachmentBytes ?? 25_000_000,
       responseMode: runtime.responseMode ?? "final-only",
+      followupMode: runtime.followupMode ?? "steer",
       discordMessageLimit: runtime.discordMessageLimit ?? 1900,
     },
   };
   if (typeof cfg.discord.tokenEnv !== "string" || cfg.discord.tokenEnv.length === 0) throw new Error("discord.tokenEnv is required");
-  if (!["rpc", "sdk"].includes(cfg.omp.mode)) throw new Error("omp.mode must be either rpc or sdk");
+  if (!["steer", "queue"].includes(cfg.runtime.followupMode)) throw new Error("runtime.followupMode must be either steer or queue");
+  if (!["rpc", "sdk", "acp"].includes(cfg.omp.mode)) throw new Error("omp.mode must be rpc, sdk, or acp");
   if (!Number.isInteger(cfg.runtime.maxConcurrency) || cfg.runtime.maxConcurrency < 1) throw new Error("runtime.maxConcurrency must be >= 1");
   if (!Number.isInteger(cfg.runtime.maxAttachmentBytes) || cfg.runtime.maxAttachmentBytes < 0) throw new Error("runtime.maxAttachmentBytes must be >= 0");
   if (!Number.isInteger(cfg.runtime.discordMessageLimit) || cfg.runtime.discordMessageLimit < 100 || cfg.runtime.discordMessageLimit > 2000) {

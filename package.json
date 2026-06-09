@@ -7,14 +7,20 @@
     "omp-discord-bridge": "./dist/src/daemon.js"
   },
   "omp": {
-    "extensions": ["./dist/src/extension.js"]
+    "extensions": [
+      "./dist/src/extension.js"
+    ]
   },
   "exports": {
     ".": "./dist/src/index.js",
     "./daemon": "./dist/src/daemon.js",
     "./extension": "./dist/src/extension.js"
   },
-  "files": ["dist", "README.md", "examples"],
+  "files": [
+    "dist",
+    "README.md",
+    "examples"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/src/daemon.js",
     "test": "vitest run",
@@ -22,9 +28,11 @@
     "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^0.25.0",
     "@oh-my-pi/pi-coding-agent": "^15.10.7",
     "discord.js": "^14.24.2",
-    "yaml": "^2.8.2"
+    "yaml": "^2.8.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

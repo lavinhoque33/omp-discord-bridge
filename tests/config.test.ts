@@ -8,7 +8,24 @@ describe("config", () => {
     expect(cfg.discord.guilds[0]?.requireMention).toBe(true);
     expect(cfg.omp.cwd).toContain("Developer");
     expect(cfg.omp.mode).toBe("rpc");
+    expect(cfg.runtime.followupMode).toBe("steer");
     expect(cfg.runtime.maxConcurrency).toBe(2);
+    expect(cfg.discord).toMatchObject({ slashCommands: { enabled: true, syncOnStart: true, commandPrefix: "omp" } });
+  });
+  it("allows explicitly queueing follow-up messages instead of steering", () => {
+    const cfg = normalizeConfig({ discord: { guilds: [{ id: "g" }] }, runtime: { followupMode: "queue" } });
+    expect(cfg.runtime.followupMode).toBe("queue");
+  });
+  it("rejects unknown follow-up modes", () => {
+    expect(() => normalizeConfig({ discord: { guilds: [{ id: "g" }] }, runtime: { followupMode: "bogus" } })).toThrow(/followupMode/);
+  });
+  it("accepts slash command overrides", () => {
+    const cfg = normalizeConfig({ discord: { guilds: [{ id: "g" }], slashCommands: { enabled: false, syncOnStart: false, commandPrefix: "pi" } } });
+    expect(cfg.discord).toMatchObject({ slashCommands: { enabled: false, syncOnStart: false, commandPrefix: "pi" } });
+  });
+  it("allows selecting ACP session mode", () => {
+    const cfg = normalizeConfig({ discord: { guilds: [{ id: "g" }] }, omp: { mode: "acp" } });
+    expect(cfg.omp.mode).toBe("acp");
   });
   it("allows explicitly selecting the legacy sdk session mode", () => {
     const cfg = normalizeConfig({ discord: { guilds: [{ id: "g", allowedChannels: ["c"] }] }, omp: { mode: "sdk" }, runtime: {} });
@@ -16,6 +33,10 @@ describe("config", () => {
   });
   it("rejects unknown OMP session modes", () => {
     expect(() => normalizeConfig({ discord: { guilds: [{ id: "g" }] }, omp: { mode: "bogus" } })).toThrow(/omp.mode/);
+  });
+  it("normalizes configured ACP slash commands", () => {
+    const cfg = normalizeConfig({ discord: { guilds: [{ id: "g" }], slashCommands: { acpCommands: [{ name: "todo", description: "Manage todos", inputHint: "args" }] } } });
+    expect(cfg.discord.slashCommands.acpCommands).toEqual([{ name: "todo", description: "Manage todos", inputHint: "args" }]);
   });
   it("rejects missing guild policies", () => {
     expect(() => normalizeConfig({ discord: { guilds: [] } })).toThrow(/guilds/);
