@@ -7,7 +7,7 @@ import { MessageFlags } from "discord.js";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeConfig } from "../src/config.js";
 import { SESSION_PICKER_PREFIX, handleDiscordInteraction, handleDiscordMessage, resolveSessionRef } from "../src/discord.js";
-import { FakeOmpSessionFactory } from "../src/omp-session.js";
+import { FakeOmpSessionFactory, tailTranscript } from "../src/omp-session.js";
 import { ThreadQueueRunner, parseManageCommand } from "../src/queue.js";
 import { buildDiscordSlashCommands } from "../src/slash-commands.js";
 import { BridgeStore } from "../src/store.js";
@@ -316,5 +316,44 @@ describe("/sessions slash command", () => {
     await handleDiscordInteraction({ config, store, runner }, unmanaged as unknown as Interaction);
     expect(unmanaged.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("project channel") }));
     expect(unmanaged.deferReply).not.toHaveBeenCalled();
+  });
+});
+
+describe("session transcript replay", () => {
+  it("keeps the newest entries within the message and character budgets", () => {
+    const entries = Array.from({ length: 30 }, (_, index) => ({ role: index % 2 === 0 ? ("user" as const) : ("assistant" as const), text: `message ${index}` }));
+    expect(tailTranscript(entries, { messages: 5, chars: 1000 }).map((entry) => entry.text)).toEqual(["message 25", "message 26", "message 27", "message 28", "message 29"]);
+    expect(tailTranscript([{ role: "user", text: "x".repeat(50) }, { role: "assistant", text: "y".repeat(50) }], { messages: 10, chars: 60 })).toEqual([{ role: "assistant", text: "y".repeat(50) }]);
+    expect(tailTranscript([{ role: "assistant", text: "z".repeat(200) }], { messages: 10, chars: 50 })).toEqual([{ role: "assistant", text: "z".repeat(50) }]);
+    expect(tailTranscript([{ role: "user", text: "   " }], { messages: 10, chars: 60 })).toEqual([]);
+  });
+
+  it("posts the replayed history before the intro when a session thread opens", async () => {
+    const sessions: OmpSessionSummary[] = [{ sessionId: handoverId, title: "Initialize HouseSync", cwd: "/proj", updatedAt: "2026-09-27T17:28:59.000Z" }];
+    const { config, store, omp, runner } = createHarness(sessions);
+    omp.transcript = { entries: [{ role: "user", text: "add the agent" }, { role: "assistant", text: "done" }], toolCalls: 7, totalMessages: 12 };
+    seedChannelSession(store, "proj1", "/proj");
+    const threadSend = vi.fn(async (_content: string) => undefined);
+    const thread = { id: "session-thread", send: threadSend };
+    const interaction = {
+      customId: `${SESSION_PICKER_PREFIX}proj1`,
+      values: [handoverId],
+      guildId: "guild1",
+      user: { id: "user1" },
+      message: { id: "picker-msg", startThread: vi.fn(async () => thread) },
+      isStringSelectMenu: () => true,
+      deferReply: vi.fn(async () => undefined),
+      editReply: vi.fn(async () => undefined),
+    };
+
+    await handleDiscordInteraction({ config, store, runner }, interaction as unknown as Interaction);
+
+    const sent = threadSend.mock.calls.map((call) => call[0]);
+    expect(sent[0]).toContain(`Replayed history of \`${handoverId}\``);
+    expect(sent[0]).toContain("showing 2 of 12 messages");
+    expect(sent[0]).toContain("7 tool calls omitted");
+    expect(sent[0]).toContain("**you**\nadd the agent");
+    expect(sent[0]).toContain("**omp**\ndone");
+    expect(sent[sent.length - 1]).toContain("Continuing omp session");
   });
 });

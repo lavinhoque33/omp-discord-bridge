@@ -39,6 +39,8 @@ Inside a channel that maps to a project directory (a `discord_sessions` row keye
 
 Picking a session creates a thread whose record stores the chosen id in `resume_session_id`. The first message in that thread resumes the session over ACP (`session/resume`) instead of starting a new one, so the original session file keeps its history — and stays usable from the terminal. `new` in that thread clears the binding and starts a fresh session.
 
+Opening a session also replays it: the bridge runs ACP `session/load` once and posts the most recent user/assistant messages into the new thread (last 20 entries, capped at 8000 characters, thinking and tool calls omitted — the header reports how many tool calls were skipped), so the Discord thread shows what was already said. Prompting keeps using `session/resume`, which attaches without re-sending history.
+
 ## Slash-command model
 
 Discord limits top-level application commands and disallows `:` in command names, while OMP ACP can expose many namespaced commands such as `skill:test-driven-development`. The bridge therefore uses a hybrid command model:

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type AvailableCommand, type Client as AcpClient, type SessionInfo, type SessionNotification } from "@agentclientprotocol/sdk";
-import type { DiscordSessionRecord, OmpSessionFactory, OmpSessionHandle, OmpPromptResult, OmpSessionSummary } from "./types.js";
+import type { DiscordSessionRecord, OmpSessionFactory, OmpSessionHandle, OmpPromptResult, OmpSessionSummary, SessionTranscript, SessionTranscriptEntry } from "./types.js";
 
 type AcpLaunchInput = {
   cwd: string;
@@ -92,6 +92,68 @@ export async function listAcpSessions(input: { cwd: string; sessionDir: string; 
   }
 }
 
+const SESSION_HISTORY_MESSAGES = 20;
+const SESSION_HISTORY_CHARS = 8_000;
+
+/** Keeps the newest entries that fit the budget, oldest first, each capped to the char budget. */
+export function tailTranscript(entries: SessionTranscriptEntry[], options: { messages: number; chars: number }): SessionTranscriptEntry[] {
+  const kept = entries
+    .filter((entry) => entry.text.trim().length > 0)
+    .slice(-options.messages)
+    .map((entry): SessionTranscriptEntry => ({ role: entry.role, text: entry.text.trim().slice(0, options.chars) }));
+  let total = kept.reduce((sum, entry) => sum + entry.text.length, 0);
+  while (kept.length > 1 && total > options.chars) {
+    const dropped = kept.shift();
+    if (dropped) total -= dropped.text.length;
+  }
+  return kept;
+}
+
+/**
+ * Replays an existing session's conversation over ACP (`session/load`) so a freshly opened Discord
+ * thread can show what was already said. Read-only: nothing is prompted and the process is killed
+ * as soon as the replay completes (or after a hard timeout).
+ */
+export async function loadAcpTranscript(input: { cwd: string; sessionDir: string; sessionId: string; cliPath?: string; env?: Record<string, string> }): Promise<SessionTranscript> {
+  const launch = buildAcpLaunch({
+    cwd: input.cwd,
+    sessionDir: input.sessionDir,
+    model: null,
+    thinkingLevel: null,
+    ...(input.cliPath ? { cliPath: input.cliPath } : {}),
+    ...(input.env ? { env: input.env } : {}),
+  });
+  const child = spawn(launch.command, launch.args, { cwd: launch.cwd, env: launch.env, stdio: ["pipe", "pipe", "pipe"] });
+  child.stderr.on("data", (chunk) => process.stderr.write(`[omp-acp-history] ${chunk}`));
+  const collected: SessionTranscriptEntry[] = [];
+  let toolCalls = 0;
+  const client: AcpClient = {
+    requestPermission: async (params) => ({
+      outcome: { outcome: "selected", optionId: params.options.find((option) => option.kind === "allow_once" || option.kind === "allow_always")?.optionId ?? params.options[0]?.optionId ?? "allow" },
+    }),
+    sessionUpdate: async (params) => {
+      const update = params.update;
+      if (update.sessionUpdate === "tool_call") toolCalls += 1;
+      if (update.sessionUpdate !== "user_message_chunk" && update.sessionUpdate !== "agent_message_chunk") return;
+      if (update.content.type !== "text") return;
+      const role: SessionTranscriptEntry["role"] = update.sessionUpdate === "user_message_chunk" ? "user" : "assistant";
+      const previous = collected[collected.length - 1];
+      if (previous?.role === role) previous.text += update.content.text;
+      else collected.push({ role, text: update.content.text });
+    },
+  };
+  const connection = new ClientSideConnection(() => client, ndJsonStream(Writable.toWeb(child.stdin), Readable.toWeb(child.stdout)));
+  const timer = setTimeout(() => child.kill(), SESSION_LIST_TIMEOUT_MS);
+  try {
+    await connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+    await connection.loadSession({ sessionId: input.sessionId, cwd: input.cwd, mcpServers: [] });
+    return { entries: tailTranscript(collected, { messages: SESSION_HISTORY_MESSAGES, chars: SESSION_HISTORY_CHARS }), toolCalls, totalMessages: collected.length };
+  } finally {
+    clearTimeout(timer);
+    child.kill();
+  }
+}
+
 export class AcpOmpSessionFactory implements OmpSessionFactory {
   private handles = new Map<string, AcpProcessSessionHandle>();
   constructor(private options: { cliPath?: string; env?: Record<string, string> } = {}) {}
@@ -99,6 +161,16 @@ export class AcpOmpSessionFactory implements OmpSessionFactory {
     return listAcpSessions({
       cwd: record.cwd,
       sessionDir: record.sessionDir,
+      ...(this.options.cliPath ? { cliPath: this.options.cliPath } : {}),
+      ...(this.options.env ? { env: this.options.env } : {}),
+    });
+  }
+  async loadTranscript(record: DiscordSessionRecord): Promise<SessionTranscript> {
+    if (!record.resumeSessionId) return { entries: [], toolCalls: 0, totalMessages: 0 };
+    return loadAcpTranscript({
+      cwd: record.cwd,
+      sessionDir: record.sessionDir,
+      sessionId: record.resumeSessionId,
       ...(this.options.cliPath ? { cliPath: this.options.cliPath } : {}),
       ...(this.options.env ? { env: this.options.env } : {}),
     });
@@ -205,8 +277,10 @@ export class FakeOmpSessionFactory implements OmpSessionFactory {
   steers: string[] = [];
   sessionsCreated = 0;
   sessions: OmpSessionSummary[] = [];
+  transcript: SessionTranscript = { entries: [], toolCalls: 0, totalMessages: 0 };
   constructor(private responder: (message: string) => string | Promise<string> = (message) => `echo: ${message}`) {}
   async listSessions(): Promise<OmpSessionSummary[]> { return this.sessions; }
+  async loadTranscript(): Promise<SessionTranscript> { return this.transcript; }
   async open(record: DiscordSessionRecord): Promise<OmpSessionHandle> { return this.handle(record); }
   async newSession(record: DiscordSessionRecord): Promise<OmpSessionHandle> { this.sessionsCreated += 1; return this.handle(record); }
   private async handle(record: DiscordSessionRecord): Promise<OmpSessionHandle> {

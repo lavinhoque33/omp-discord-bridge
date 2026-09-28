@@ -72,6 +72,18 @@ export interface OmpSessionSummary {
   updatedAt: string | null;
 }
 
+export interface SessionTranscriptEntry {
+  role: "user" | "assistant";
+  text: string;
+}
+
+/** Replayed conversation of an existing session (`session/load`), trimmed to a recent window. */
+export interface SessionTranscript {
+  entries: SessionTranscriptEntry[];
+  toolCalls: number;
+  totalMessages: number;
+}
+
 export interface QueuedMessageRecord {
   id: string;
   threadId: string;
@@ -105,6 +117,8 @@ export interface OmpSessionFactory {
   newSession(record: DiscordSessionRecord): Promise<OmpSessionHandle>;
   /** Enumerate the machine's omp sessions (ACP `session/list`) for `record`'s project directory. */
   listSessions?(record: DiscordSessionRecord): Promise<OmpSessionSummary[]>;
+  /** Replay the conversation of the session `record` continues (ACP `session/load`). */
+  loadTranscript?(record: DiscordSessionRecord): Promise<SessionTranscript>;
   close?(): Promise<void> | void;
 }
 

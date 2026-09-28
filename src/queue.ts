@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { BridgeStore } from "./store.js";
-import type { OmpSessionFactory, OmpSessionSummary, ThreadMessenger } from "./types.js";
+import type { OmpSessionFactory, OmpSessionSummary, SessionTranscript, ThreadMessenger } from "./types.js";
 import { chunkDiscordMessage, formatStatus } from "./render.js";
 
 export class ThreadQueueRunner {
@@ -46,6 +46,13 @@ export class ThreadQueueRunner {
     return sessions
       .filter((entry) => !entry.cwd || path.resolve(entry.cwd) === cwd)
       .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+  }
+
+  /** Replayed history of the session this thread continues, for display when the thread opens. */
+  async loadSessionTranscript(threadId: string): Promise<SessionTranscript> {
+    const session = this.deps.store.getSession(threadId);
+    if (!session?.resumeSessionId || !this.deps.omp.loadTranscript) return { entries: [], toolCalls: 0, totalMessages: 0 };
+    return this.deps.omp.loadTranscript(session);
   }
 
   async newSession(threadId: string): Promise<void> {

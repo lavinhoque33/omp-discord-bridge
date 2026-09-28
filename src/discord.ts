@@ -4,7 +4,7 @@ import path from "node:path";
 import type { BridgeConfig, GuildPolicy, OmpSessionSummary } from "./types.js";
 import type { BridgeStore } from "./store.js";
 import { findGuildPolicy } from "./config.js";
-import { slugifyThreadName, stripBotMention } from "./render.js";
+import { chunkDiscordMessage, slugifyThreadName, stripBotMention } from "./render.js";
 import { parseManageCommand, parseThreadCommand, type ThreadQueueRunner } from "./queue.js";
 import { acpAutocompleteChoices, resolveAcpSlashPrompt } from "./slash-commands.js";
 
@@ -94,6 +94,7 @@ async function openSessionThread(input: {
   session: OmpSessionSummary;
   authorId: string;
   autoArchiveMinutes: number;
+  runner: ThreadQueueRunner;
 }): Promise<string> {
   const thread = await input.anchor.startThread({
     name: slugifyThreadName(input.session.title ?? input.session.sessionId.slice(0, 8)),
@@ -116,6 +117,16 @@ async function openSessionThread(input: {
     thinkingLevel: input.config.omp.thinkingLevel,
     createdByUserId: input.authorId,
   });
+  try {
+    const transcript = await input.runner.loadSessionTranscript(thread.id);
+    if (transcript.entries.length > 0) {
+      const header = `**Replayed history of \`${input.session.sessionId}\`** — showing ${transcript.entries.length} of ${transcript.totalMessages} messages${transcript.toolCalls > 0 ? `, ${transcript.toolCalls} tool calls omitted` : ""}.`;
+      const body = transcript.entries.map((entry) => `**${entry.role === "user" ? "you" : "omp"}**\n${entry.text}`).join("\n\n");
+      for (const chunk of chunkDiscordMessage(`${header}\n\n${body}`, input.config.runtime.discordMessageLimit)) await thread.send(chunk);
+    }
+  } catch (error) {
+    process.stderr.write(`[session-history] ${thread.id}: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
   await thread.send([
     `Continuing omp session \`${input.session.sessionId}\`${input.session.title ? ` — **${input.session.title}**` : ""} for \`${input.cwd}\`.`,
     "Send a message here to pick that conversation back up. Controls: `status`, `stop`, `new` (fresh session), `compact`.",
@@ -168,6 +179,7 @@ export async function handleDiscordMessage(deps: { config: BridgeConfig; store: 
         session: target,
         authorId: message.author.id,
         autoArchiveMinutes: policy?.threadAutoArchiveMinutes ?? 1440,
+        runner: deps.runner,
       });
       return;
     }
@@ -285,6 +297,7 @@ export async function handleDiscordInteraction(deps: { config: BridgeConfig; sto
       session: target,
       authorId: interaction.user.id,
       autoArchiveMinutes: policy.threadAutoArchiveMinutes,
+      runner: deps.runner,
     });
     await interaction.editReply({ content: `Opened <#${threadId}> — session \`${target.sessionId}\` continues there.` });
     return;
