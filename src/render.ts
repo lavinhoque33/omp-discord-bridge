@@ -27,11 +27,12 @@ export function chunkDiscordMessage(text: string, limit = 1900): string[] {
   return chunks;
 }
 
-export function formatStatus(input: { threadId: string; sessionFile: string | null; cwd: string; status: string; queued: number; running: number }): string {
+export function formatStatus(input: { threadId: string; sessionFile: string | null; resumeSessionId?: string | null; cwd: string; status: string; queued: number; running: number }): string {
   return [
     "**OMP Discord Bridge status**",
     `Thread: \`${input.threadId}\``,
     `Session: \`${input.sessionFile ?? "not-created-yet"}\``,
+    ...(input.resumeSessionId ? [`Continues: \`${input.resumeSessionId}\` (existing omp session)`] : []),
     `CWD: \`${input.cwd}\``,
     `State: \`${input.status}\``,
     `Queue: ${input.running} running, ${input.queued} queued`,

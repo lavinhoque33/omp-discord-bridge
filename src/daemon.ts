@@ -50,6 +50,7 @@ async function discoverAcpCommands(config: BridgeConfig): Promise<BridgeAvailabl
     parentChannelId: "discord-bridge",
     triggerMessageId: "slash-command-discovery",
     sessionFile: null,
+    resumeSessionId: null,
     sessionDir: discoverySessionDir,
     cwd: config.omp.cwd,
     model: config.omp.model,

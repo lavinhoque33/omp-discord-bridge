@@ -38,6 +38,7 @@ function fakeInteraction(commandName: string, overrides: any = {}) {
     options: { getString: vi.fn((name: string) => (name === "prompt" ? prompt : null)) },
     isChatInputCommand: () => true,
     isAutocomplete: () => false,
+    isStringSelectMenu: () => false,
     deferReply: vi.fn(async (_options?: any) => undefined),
     editReply: vi.fn(async (_message: any) => undefined),
     reply: vi.fn(async (_message: any) => undefined),
@@ -167,6 +168,7 @@ describe("Discord orchestration", () => {
       options: { getFocused: vi.fn(() => "test") },
       isAutocomplete: () => true,
       isChatInputCommand: () => false,
+      isStringSelectMenu: () => false,
       respond: vi.fn(async (_choices: any) => undefined),
     };
 

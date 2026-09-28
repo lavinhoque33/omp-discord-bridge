@@ -1,5 +1,6 @@
+import path from "node:path";
 import type { BridgeStore } from "./store.js";
-import type { OmpSessionFactory, ThreadMessenger } from "./types.js";
+import type { OmpSessionFactory, OmpSessionSummary, ThreadMessenger } from "./types.js";
 import { chunkDiscordMessage, formatStatus } from "./render.js";
 
 export class ThreadQueueRunner {
@@ -33,13 +34,25 @@ export class ThreadQueueRunner {
     const session = this.deps.store.getSession(threadId);
     if (!session) return this.deps.messenger.send(threadId, "No OMP session is mapped to this thread.");
     const counts = this.deps.store.counts(threadId);
-    await this.deps.messenger.send(threadId, formatStatus({ threadId, sessionFile: session.sessionFile, cwd: session.cwd, status: session.status, ...counts }));
+    await this.deps.messenger.send(threadId, formatStatus({ threadId, sessionFile: session.sessionFile, resumeSessionId: session.resumeSessionId, cwd: session.cwd, status: session.status, ...counts }));
+  }
+
+  /** omp sessions recorded for this thread's project directory, newest first. */
+  async listProjectSessions(threadId: string): Promise<OmpSessionSummary[]> {
+    const session = this.deps.store.getSession(threadId);
+    if (!session || !this.deps.omp.listSessions) return [];
+    const sessions = await this.deps.omp.listSessions(session);
+    const cwd = path.resolve(session.cwd);
+    return sessions
+      .filter((entry) => !entry.cwd || path.resolve(entry.cwd) === cwd)
+      .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
   }
 
   async newSession(threadId: string): Promise<void> {
     const session = this.deps.store.getSession(threadId);
     if (!session) return this.deps.messenger.send(threadId, "No OMP session is mapped to this thread.");
-    const handle = await this.deps.omp.newSession(session);
+    this.deps.store.updateSession(threadId, { resumeSessionId: null });
+    const handle = await this.deps.omp.newSession({ ...session, resumeSessionId: null });
     this.deps.store.updateSession(threadId, { status: "active", sessionFile: `${session.sessionDir}/${handle.id}.json` });
     await this.deps.messenger.send(threadId, "Started a fresh OMP session for this Discord thread.");
   }
@@ -93,5 +106,16 @@ export function parseThreadCommand(content: string): "status" | "stop" | "new" |
   if (["stop", "/stop", "abort", "/abort"].includes(normalized)) return "stop";
   if (["new", "/new"].includes(normalized)) return "new";
   if (["compact", "/compact"].includes(normalized)) return "compact";
+  return undefined;
+}
+
+export type ManageCommand = { command: "sessions" } | { command: "open"; ref: string };
+
+/** `sessions` lists the project's omp sessions; `open <id-prefix>` binds a thread to one of them. */
+export function parseManageCommand(content: string): ManageCommand | undefined {
+  const text = content.trim();
+  if (["sessions", "/sessions"].includes(text.toLowerCase())) return { command: "sessions" };
+  const match = /^\/?(?:open|resume)\s+(\S+)$/i.exec(text);
+  if (match?.[1]) return { command: "open", ref: match[1] };
   return undefined;
 }

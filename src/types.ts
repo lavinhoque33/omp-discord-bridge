@@ -52,6 +52,8 @@ export interface DiscordSessionRecord {
   parentChannelId: string;
   triggerMessageId: string;
   sessionFile: string | null;
+  /** ACP session id this record continues (threads opened on an existing session) instead of starting fresh. */
+  resumeSessionId: string | null;
   sessionDir: string;
   cwd: string;
   model: string | null;
@@ -60,6 +62,14 @@ export interface DiscordSessionRecord {
   status: SessionStatus;
   createdAt: string;
   updatedAt: string;
+}
+
+/** One entry from ACP `session/list` (an omp session file on this machine). */
+export interface OmpSessionSummary {
+  sessionId: string;
+  title: string | null;
+  cwd: string | null;
+  updatedAt: string | null;
 }
 
 export interface QueuedMessageRecord {
@@ -93,6 +103,8 @@ export interface OmpSessionHandle {
 export interface OmpSessionFactory {
   open(record: DiscordSessionRecord): Promise<OmpSessionHandle>;
   newSession(record: DiscordSessionRecord): Promise<OmpSessionHandle>;
+  /** Enumerate the machine's omp sessions (ACP `session/list`) for `record`'s project directory. */
+  listSessions?(record: DiscordSessionRecord): Promise<OmpSessionSummary[]>;
   close?(): Promise<void> | void;
 }
 

@@ -1,11 +1,11 @@
-import { ChannelType, Client, GatewayIntentBits, MessageFlags, Partials, type ChatInputCommandInteraction, type Interaction, type Message } from "discord.js";
+import { ActionRowBuilder, ChannelType, Client, GatewayIntentBits, MessageFlags, Partials, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ThreadAutoArchiveDuration, type ChatInputCommandInteraction, type Interaction, type Message } from "discord.js";
 import fs from "node:fs";
 import path from "node:path";
-import type { BridgeConfig, GuildPolicy } from "./types.js";
+import type { BridgeConfig, GuildPolicy, OmpSessionSummary } from "./types.js";
 import type { BridgeStore } from "./store.js";
 import { findGuildPolicy } from "./config.js";
 import { slugifyThreadName, stripBotMention } from "./render.js";
-import { parseThreadCommand, type ThreadQueueRunner } from "./queue.js";
+import { parseManageCommand, parseThreadCommand, type ThreadQueueRunner } from "./queue.js";
 import { acpAutocompleteChoices, resolveAcpSlashPrompt } from "./slash-commands.js";
 
 export class DiscordThreadMessenger {
@@ -44,6 +44,86 @@ function promptWithAttachments(content: string, attachments: { name: string; url
   return `${content}\n\nAttachments:\n${lines.join("\n")}`;
 }
 
+const THREAD_ARCHIVE_DURATIONS: Record<number, ThreadAutoArchiveDuration> = {
+  60: ThreadAutoArchiveDuration.OneHour,
+  1440: ThreadAutoArchiveDuration.OneDay,
+  4320: ThreadAutoArchiveDuration.ThreeDays,
+  10080: ThreadAutoArchiveDuration.OneWeek,
+};
+
+export const SESSION_PICKER_PREFIX = "omp-session-picker:";
+
+/** `01a0e425 · updated 3h ago` — short id plus age, for select-menu descriptions. */
+export function describeSession(session: OmpSessionSummary): string {
+  const id = session.sessionId.slice(0, 8);
+  if (!session.updatedAt) return id;
+  const minutes = Math.round((Date.now() - new Date(session.updatedAt).getTime()) / 60_000);
+  if (!Number.isFinite(minutes)) return id;
+  if (minutes < 60) return `${id} · updated ${Math.max(minutes, 0)}m ago`;
+  if (minutes < 60 * 24) return `${id} · updated ${Math.round(minutes / 60)}h ago`;
+  return `${id} · updated ${Math.round(minutes / (60 * 24))}d ago`;
+}
+
+export function sessionPickerRows(channelId: string, sessions: OmpSessionSummary[]) {
+  const options = sessions.slice(0, 25).map((session) => new StringSelectMenuOptionBuilder()
+    .setLabel((session.title ?? session.sessionId.slice(0, 8)).slice(0, 100))
+    .setValue(session.sessionId)
+    .setDescription(describeSession(session)));
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`${SESSION_PICKER_PREFIX}${channelId}`)
+    .setPlaceholder("Continue an existing omp session")
+    .addOptions(options);
+  return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)];
+}
+
+/** Sessions arrive newest-first, so the first match wins. Matches an id prefix, then any id substring, then the title. */
+export function resolveSessionRef(sessions: OmpSessionSummary[], ref: string): OmpSessionSummary | undefined {
+  const needle = ref.trim().toLowerCase();
+  return sessions.find((session) => session.sessionId.toLowerCase().startsWith(needle))
+    ?? sessions.find((session) => session.sessionId.toLowerCase().includes(needle))
+    ?? sessions.find((session) => (session.title ?? "").toLowerCase().includes(needle));
+}
+
+async function openSessionThread(input: {
+  config: BridgeConfig;
+  store: BridgeStore;
+  guildId: string;
+  parentChannelId: string;
+  cwd: string;
+  anchor: Message;
+  session: OmpSessionSummary;
+  authorId: string;
+  autoArchiveMinutes: number;
+}): Promise<string> {
+  const thread = await input.anchor.startThread({
+    name: slugifyThreadName(input.session.title ?? input.session.sessionId.slice(0, 8)),
+    autoArchiveDuration: THREAD_ARCHIVE_DURATIONS[input.autoArchiveMinutes] ?? ThreadAutoArchiveDuration.OneDay,
+    reason: `OMP session ${input.session.sessionId}`,
+  });
+  fs.mkdirSync(input.config.omp.sessionRoot, { recursive: true });
+  const sessionDir = path.join(input.config.omp.sessionRoot, thread.id);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  input.store.createSession({
+    threadId: thread.id,
+    guildId: input.guildId,
+    parentChannelId: input.parentChannelId,
+    triggerMessageId: input.anchor.id,
+    sessionFile: null,
+    resumeSessionId: input.session.sessionId,
+    sessionDir,
+    cwd: input.cwd,
+    model: input.config.omp.model,
+    thinkingLevel: input.config.omp.thinkingLevel,
+    createdByUserId: input.authorId,
+  });
+  await thread.send([
+    `Continuing omp session \`${input.session.sessionId}\`${input.session.title ? ` — **${input.session.title}**` : ""} for \`${input.cwd}\`.`,
+    "Send a message here to pick that conversation back up. Controls: `status`, `stop`, `new` (fresh session), `compact`.",
+    "This thread writes to the same session file your terminal uses — avoid driving it from both at once.",
+  ].join("\n"));
+  return thread.id;
+}
+
 export async function handleDiscordMessage(deps: { config: BridgeConfig; store: BridgeStore; runner: ThreadQueueRunner }, message: Message): Promise<void> {
   if (message.author.bot || !message.guildId) return;
   const botId = message.client.user?.id;
@@ -55,6 +135,42 @@ export async function handleDiscordMessage(deps: { config: BridgeConfig; store: 
     if (command === "stop") return deps.runner.stop(message.channelId);
     if (command === "new") return deps.runner.newSession(message.channelId);
     if (command === "compact") return deps.runner.compact(message.channelId);
+    const manage = parseManageCommand(message.content);
+    if (manage) {
+      const channel = message.channel;
+      if (!channel.isTextBased() || !("send" in channel)) return;
+      if (channel.isThread()) {
+        await channel.send("Run this in the project channel, not inside a session thread.");
+        return;
+      }
+      const sessions = await deps.runner.listProjectSessions(message.channelId);
+      if (sessions.length === 0) {
+        await channel.send(`No omp sessions found for \`${existing.cwd}\`.`);
+        return;
+      }
+      if (manage.command === "sessions") {
+        await channel.send({ content: `**omp sessions for** \`${existing.cwd}\` — pick one to open a thread that continues it:`, components: sessionPickerRows(message.channelId, sessions) });
+        return;
+      }
+      const target = resolveSessionRef(sessions, manage.ref);
+      if (!target) {
+        await channel.send(`No session matches \`${manage.ref}\` in \`${existing.cwd}\`. Run \`sessions\` for the list.`);
+        return;
+      }
+      const policy = findGuildPolicy(deps.config, message.guildId);
+      await openSessionThread({
+        config: deps.config,
+        store: deps.store,
+        guildId: message.guildId,
+        parentChannelId: message.channelId,
+        cwd: existing.cwd,
+        anchor: message,
+        session: target,
+        authorId: message.author.id,
+        autoArchiveMinutes: policy?.threadAutoArchiveMinutes ?? 1440,
+      });
+      return;
+    }
     const attachments = attachmentSummaries(message, deps.config.runtime.maxAttachmentBytes);
     const prompt = promptWithAttachments(message.content.trim(), attachments);
     if (deps.config.runtime.followupMode === "steer" && await deps.runner.steer(message.channelId, prompt)) {
@@ -77,7 +193,7 @@ export async function handleDiscordMessage(deps: { config: BridgeConfig; store: 
   if (!message.channel.isTextBased() || message.channel.type === ChannelType.DM) return;
   const prompt = stripBotMention(message.content, botId);
   if (!prompt) return;
-  const thread = await message.startThread({ name: slugifyThreadName(prompt), autoArchiveDuration: policy.threadAutoArchiveMinutes as any, reason: "OMP Discord bridge session" });
+  const thread = await message.startThread({ name: slugifyThreadName(prompt), autoArchiveDuration: THREAD_ARCHIVE_DURATIONS[policy.threadAutoArchiveMinutes] ?? ThreadAutoArchiveDuration.OneDay, reason: "OMP Discord bridge session" });
   fs.mkdirSync(deps.config.omp.sessionRoot, { recursive: true });
   const sessionDir = path.join(deps.config.omp.sessionRoot, thread.id);
   fs.mkdirSync(sessionDir, { recursive: true });
@@ -119,6 +235,35 @@ function promptOption(interaction: ChatInputCommandInteraction): string | null {
 }
 
 export async function handleDiscordInteraction(deps: { config: BridgeConfig; store: BridgeStore; runner: ThreadQueueRunner }, interaction: Interaction): Promise<void> {
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith(SESSION_PICKER_PREFIX)) {
+    const parentChannelId = interaction.customId.slice(SESSION_PICKER_PREFIX.length);
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const parent = deps.store.getSession(parentChannelId);
+    const policy = interaction.guildId ? findGuildPolicy(deps.config, interaction.guildId) : undefined;
+    if (!parent || !interaction.guildId || !policy || !isAllowed(policy, { channelId: parentChannelId, userId: interaction.user.id })) {
+      await interaction.editReply({ content: "You are not allowed to open OMP sessions here." });
+      return;
+    }
+    const sessions = await deps.runner.listProjectSessions(parentChannelId);
+    const target = sessions.find((session) => session.sessionId === interaction.values[0]);
+    if (!target) {
+      await interaction.editReply({ content: "That session is no longer available for this project." });
+      return;
+    }
+    const threadId = await openSessionThread({
+      config: deps.config,
+      store: deps.store,
+      guildId: interaction.guildId,
+      parentChannelId,
+      cwd: parent.cwd,
+      anchor: interaction.message,
+      session: target,
+      authorId: interaction.user.id,
+      autoArchiveMinutes: policy.threadAutoArchiveMinutes,
+    });
+    await interaction.editReply({ content: `Opened <#${threadId}> — session \`${target.sessionId}\` continues there.` });
+    return;
+  }
   if (!deps.config.discord.slashCommands.enabled) return;
   if (interaction.isAutocomplete()) {
     const focused = String(interaction.options.getFocused() ?? "");

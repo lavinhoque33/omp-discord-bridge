@@ -13,6 +13,7 @@ function rowToSession(row: any): DiscordSessionRecord {
     parentChannelId: row.parent_channel_id,
     triggerMessageId: row.trigger_message_id,
     sessionFile: row.session_file,
+    resumeSessionId: row.resume_session_id ?? null,
     sessionDir: row.session_dir,
     cwd: row.cwd,
     model: row.model,
@@ -57,6 +58,7 @@ export class BridgeStore {
         parent_channel_id TEXT NOT NULL,
         trigger_message_id TEXT NOT NULL,
         session_file TEXT,
+        resume_session_id TEXT,
         session_dir TEXT NOT NULL,
         cwd TEXT NOT NULL,
         model TEXT,
@@ -81,23 +83,25 @@ export class BridgeStore {
       );
       CREATE INDEX IF NOT EXISTS queued_messages_thread_status_created_idx ON queued_messages(thread_id, status, created_at);
     `);
+    const columns = this.db.prepare("SELECT name FROM pragma_table_info('discord_sessions')").all();
+    if (!columns.some((column) => column.name === "resume_session_id")) this.db.exec("ALTER TABLE discord_sessions ADD COLUMN resume_session_id TEXT");
   }
-  createSession(input: Omit<DiscordSessionRecord, "createdAt" | "updatedAt" | "status"> & { status?: SessionStatus }): DiscordSessionRecord {
+  createSession(input: Omit<DiscordSessionRecord, "createdAt" | "updatedAt" | "status" | "resumeSessionId"> & { status?: SessionStatus; resumeSessionId?: string | null }): DiscordSessionRecord {
     const t = now();
-    const record: DiscordSessionRecord = { ...input, status: input.status ?? "active", createdAt: t, updatedAt: t };
-    this.db.prepare(`INSERT INTO discord_sessions(thread_id,guild_id,parent_channel_id,trigger_message_id,session_file,session_dir,cwd,model,thinking_level,created_by_user_id,status,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(record.threadId, record.guildId, record.parentChannelId, record.triggerMessageId, record.sessionFile, record.sessionDir, record.cwd, record.model, record.thinkingLevel, record.createdByUserId, record.status, record.createdAt, record.updatedAt);
+    const record: DiscordSessionRecord = { ...input, resumeSessionId: input.resumeSessionId ?? null, status: input.status ?? "active", createdAt: t, updatedAt: t };
+    this.db.prepare(`INSERT INTO discord_sessions(thread_id,guild_id,parent_channel_id,trigger_message_id,session_file,resume_session_id,session_dir,cwd,model,thinking_level,created_by_user_id,status,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(record.threadId, record.guildId, record.parentChannelId, record.triggerMessageId, record.sessionFile, record.resumeSessionId, record.sessionDir, record.cwd, record.model, record.thinkingLevel, record.createdByUserId, record.status, record.createdAt, record.updatedAt);
     return record;
   }
   getSession(threadId: string): DiscordSessionRecord | undefined {
     const row = this.db.prepare("SELECT * FROM discord_sessions WHERE thread_id = ?").get(threadId);
     return row ? rowToSession(row) : undefined;
   }
-  updateSession(threadId: string, patch: Partial<Pick<DiscordSessionRecord, "sessionFile" | "status" | "model" | "thinkingLevel">>): void {
+  updateSession(threadId: string, patch: Partial<Pick<DiscordSessionRecord, "sessionFile" | "resumeSessionId" | "status" | "model" | "thinkingLevel">>): void {
     const current = this.getSession(threadId);
     if (!current) throw new Error(`unknown thread ${threadId}`);
-    this.db.prepare("UPDATE discord_sessions SET session_file=?, status=?, model=?, thinking_level=?, updated_at=? WHERE thread_id=?")
-      .run(patch.sessionFile ?? current.sessionFile, patch.status ?? current.status, patch.model ?? current.model, patch.thinkingLevel ?? current.thinkingLevel, now(), threadId);
+    this.db.prepare("UPDATE discord_sessions SET session_file=?, resume_session_id=?, status=?, model=?, thinking_level=?, updated_at=? WHERE thread_id=?")
+      .run(patch.sessionFile ?? current.sessionFile, patch.resumeSessionId === undefined ? current.resumeSessionId : patch.resumeSessionId, patch.status ?? current.status, patch.model ?? current.model, patch.thinkingLevel ?? current.thinkingLevel, now(), threadId);
   }
   enqueue(input: { threadId: string; discordMessageId: string; authorId: string; content: string; attachments?: unknown[] }): QueuedMessageRecord {
     const t = now();
