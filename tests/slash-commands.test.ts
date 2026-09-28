@@ -11,8 +11,8 @@ describe("Discord slash commands", () => {
   it("builds guild chat-input commands from the default command prefix", () => {
     const commands = buildDiscordSlashCommands(bridgeConfig());
 
-    expect(commands.map((command) => command.name)).toEqual(["omp", "omp-status", "omp-stop", "omp-new", "omp-compact"]);
-    expect(commands).toHaveLength(5);
+    expect(commands.map((command) => command.name)).toEqual(["sessions", "omp", "omp-status", "omp-stop", "omp-new", "omp-compact"]);
+    expect(commands).toHaveLength(6);
     expect(commands.every((command) => command.type === ApplicationCommandType.ChatInput)).toBe(true);
   });
 

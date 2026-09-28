@@ -234,6 +234,31 @@ function promptOption(interaction: ChatInputCommandInteraction): string | null {
   }
 }
 
+async function handleSessionsCommand(deps: { config: BridgeConfig; store: BridgeStore; runner: ThreadQueueRunner }, interaction: ChatInputCommandInteraction): Promise<void> {
+  const record = deps.store.getSession(interaction.channelId);
+  const policy = interaction.guildId ? findGuildPolicy(deps.config, interaction.guildId) : undefined;
+  if (!record) {
+    await interaction.reply({ content: "Use this in a project channel that the bridge maps to an OMP directory.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  if (!policy || !isAllowed(policy, { channelId: record.parentChannelId, userId: interaction.user.id })) {
+    await interaction.reply({ content: "You are not allowed to use this OMP bridge command here.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  if (interaction.channel?.isThread()) {
+    await interaction.reply({ content: "Run this in the project channel, not inside a session thread.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  // Public reply: the select menu lives on a real channel message, which is what a new thread is anchored to.
+  await interaction.deferReply();
+  const sessions = await deps.runner.listProjectSessions(interaction.channelId);
+  if (sessions.length === 0) {
+    await interaction.editReply({ content: `No omp sessions found for \`${record.cwd}\`.` });
+    return;
+  }
+  await interaction.editReply({ content: `**omp sessions for** \`${record.cwd}\` — pick one to open a thread that continues it:`, components: sessionPickerRows(interaction.channelId, sessions) });
+}
+
 export async function handleDiscordInteraction(deps: { config: BridgeConfig; store: BridgeStore; runner: ThreadQueueRunner }, interaction: Interaction): Promise<void> {
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith(SESSION_PICKER_PREFIX)) {
     const parentChannelId = interaction.customId.slice(SESSION_PICKER_PREFIX.length);
@@ -265,6 +290,10 @@ export async function handleDiscordInteraction(deps: { config: BridgeConfig; sto
     return;
   }
   if (!deps.config.discord.slashCommands.enabled) return;
+  if (interaction.isChatInputCommand() && interaction.commandName === "sessions") {
+    await handleSessionsCommand(deps, interaction);
+    return;
+  }
   if (interaction.isAutocomplete()) {
     const focused = String(interaction.options.getFocused() ?? "");
     const choices = acpAutocompleteChoices(deps.config, interaction.commandName, focused);

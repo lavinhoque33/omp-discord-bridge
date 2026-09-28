@@ -3,11 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Interaction, Message } from "discord.js";
+import { MessageFlags } from "discord.js";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeConfig } from "../src/config.js";
 import { SESSION_PICKER_PREFIX, handleDiscordInteraction, handleDiscordMessage, resolveSessionRef } from "../src/discord.js";
 import { FakeOmpSessionFactory } from "../src/omp-session.js";
 import { ThreadQueueRunner, parseManageCommand } from "../src/queue.js";
+import { buildDiscordSlashCommands } from "../src/slash-commands.js";
 import { BridgeStore } from "../src/store.js";
 import type { OmpSessionSummary } from "../src/types.js";
 
@@ -252,5 +254,67 @@ describe("session history commands", () => {
     await runner.newSession("session-thread");
 
     expect(store.getSession("session-thread")?.resumeSessionId).toBeNull();
+  });
+});
+
+describe("/sessions slash command", () => {
+  function fakeSessionsInteraction(overrides: Record<string, unknown> = {}) {
+    return {
+      commandName: "sessions",
+      guildId: "guild1",
+      channelId: "proj1",
+      channel: { isThread: () => false },
+      user: { id: "user1" },
+      isChatInputCommand: () => true,
+      isAutocomplete: () => false,
+      isStringSelectMenu: () => false,
+      reply: vi.fn(async (_payload: { content?: string; flags?: number }) => undefined),
+      deferReply: vi.fn(async (_payload?: { flags?: number }) => undefined),
+      editReply: vi.fn(async (_payload: { content?: string; components?: unknown[] }) => undefined),
+      ...overrides,
+    };
+  }
+
+  it("is registered as a top-level command and wins name collisions with ACP commands", () => {
+    const config = normalizeConfig({ discord: { guilds: [{ id: "guild1" }], slashCommands: { acpCommands: [{ name: "sessions", description: "ACP session helper" }] } } });
+    const names = buildDiscordSlashCommands(config).map((command) => command.name);
+    expect(names.filter((name) => name === "sessions")).toHaveLength(1);
+    expect(buildDiscordSlashCommands(config).find((command) => command.name === "sessions")?.description).toContain("this project's OMP sessions");
+  });
+
+  it("posts the session picker as a public channel message", async () => {
+    const sessions: OmpSessionSummary[] = [
+      { sessionId: handoverId, title: "Initialize HouseSync", cwd: "/proj", updatedAt: "2026-09-27T17:28:59.000Z" },
+      { sessionId: "verify-1", title: "Verify Handoff", cwd: "/proj", updatedAt: "2026-09-27T18:34:09.000Z" },
+    ];
+    const { config, store, runner } = createHarness(sessions);
+    seedChannelSession(store, "proj1", "/proj");
+    const interaction = fakeSessionsInteraction();
+
+    // test double for a discord.js ChatInputCommandInteraction
+    await handleDiscordInteraction({ config, store, runner }, interaction as unknown as Interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith();
+    expect(interaction.reply).not.toHaveBeenCalled();
+    const payload = interaction.editReply.mock.calls[0]?.[0];
+    expect(payload?.content).toContain("**omp sessions for** `/proj`");
+    const row = (payload?.components as { toJSON(): { components: { custom_id: string; options: { value: string }[] }[] } }[])[0]?.toJSON();
+    expect(row?.components[0]?.custom_id).toBe(`${SESSION_PICKER_PREFIX}proj1`);
+    expect(row?.components[0]?.options.map((option) => option.value)).toEqual(["verify-1", handoverId]);
+  });
+
+  it("refuses inside a session thread and outside project channels", async () => {
+    const { config, store, runner } = createHarness([]);
+    seedChannelSession(store, "proj1", "/proj");
+
+    const inThread = fakeSessionsInteraction({ channelId: "session-thread", channel: { isThread: () => true } });
+    await handleDiscordInteraction({ config, store, runner }, inThread as unknown as Interaction);
+    expect(inThread.reply).toHaveBeenCalledWith(expect.objectContaining({ flags: MessageFlags.Ephemeral }));
+    expect(inThread.deferReply).not.toHaveBeenCalled();
+
+    const unmanaged = fakeSessionsInteraction({ channelId: "other-channel" });
+    await handleDiscordInteraction({ config, store, runner }, unmanaged as unknown as Interaction);
+    expect(unmanaged.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("project channel") }));
+    expect(unmanaged.deferReply).not.toHaveBeenCalled();
   });
 });

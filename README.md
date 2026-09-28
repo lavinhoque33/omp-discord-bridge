@@ -11,8 +11,8 @@ The project is intentionally small: a Node.js daemon, a SQLite queue/store, Disc
 - **Durable SQLite state** — sessions and queued turns survive daemon restarts.
 - **Serialized per-thread queue** — multiple users can enqueue turns safely while global concurrency stays bounded.
 - **Live OMP controls** — use `status`, `stop`, `new`, and `compact` inside managed threads, or slash-command equivalents.
-- **Session history threads** — run `sessions` in a project channel to list the OMP sessions recorded for that directory and open a thread bound to one of them, so Discord continues the original session file.
-- **Discord slash commands** — syncs `/omp`, `/omp-status`, `/omp-stop`, `/omp-new`, `/omp-compact`, and OMP ACP tools.
+- **Session history threads** — `/sessions` in a project channel lists the OMP sessions recorded for that directory and opens a thread bound to the one you pick, so Discord continues the original session file.
+- **Discord slash commands** — syncs `/sessions`, `/omp`, `/omp-status`, `/omp-stop`, `/omp-new`, `/omp-compact`, and OMP ACP tools.
 - **All ACP commands are invokable** — safe core ACP commands register directly (`/todo`, `/model`, `/tools`); namespaced commands use autocomplete runners (`/skill`, `/codex`, `/posthog`, etc.).
 - **Configurable follow-ups** — either steer the currently running OMP turn or enqueue messages behind it.
 - **Attachment context** — includes Discord attachment URLs in prompts up to a configurable byte limit.
@@ -34,7 +34,7 @@ Approval forwarding is intentionally out of scope: the ACP adapter currently aut
 
 Inside a channel that maps to a project directory (a `discord_sessions` row keyed by the channel id):
 
-- `sessions` — lists the OMP sessions recorded for that channel's `cwd` and posts a select menu (newest first, up to 25).
+- `/sessions` — lists the OMP sessions recorded for that channel's `cwd` and posts a select menu (newest first, up to 25). A plain `sessions` message does the same.
 - `open <id-prefix>` / `resume <id-prefix>` — opens the thread directly; the reference matches a session id prefix, any id substring, or part of the title.
 
 Picking a session creates a thread whose record stores the chosen id in `resume_session_id`. The first message in that thread resumes the session over ACP (`session/resume`) instead of starting a new one, so the original session file keeps its history — and stays usable from the terminal. `new` in that thread clears the binding and starts a fresh session.

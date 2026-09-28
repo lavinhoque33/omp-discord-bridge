@@ -68,6 +68,12 @@ export function buildDiscordSlashCommands(config: BridgeConfig): RESTPostAPIChat
 
   const baseCommands: RESTPostAPIChatInputApplicationCommandsJSONBody[] = [
     {
+      name: "sessions",
+      description: "List this project's OMP sessions and open a thread for one",
+      type: ApplicationCommandType.ChatInput,
+      options: [],
+    },
+    {
       name: commandPrefix,
       description: "Send a prompt to OMP",
       type: ApplicationCommandType.ChatInput,
