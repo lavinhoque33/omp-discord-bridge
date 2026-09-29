@@ -1,13 +1,14 @@
 import path from "node:path";
 import type { BridgeStore } from "./store.js";
 import type { OmpSessionFactory, OmpSessionSummary, SessionTranscript, ThreadMessenger } from "./types.js";
-import { chunkDiscordMessage, formatStatus } from "./render.js";
+import { formatStatus } from "./render.js";
 
 export class ThreadQueueRunner {
   private runningThreads = new Set<string>();
   private active = 0;
   private controllers = new Map<string, AbortController>();
-  constructor(private deps: { store: BridgeStore; omp: OmpSessionFactory; messenger: ThreadMessenger; messageLimit: number; maxConcurrency: number }) {}
+  /** `live.settle` waits until a turn's streamed output is fully visible before the next message posts. */
+  constructor(private deps: { store: BridgeStore; omp: OmpSessionFactory; messenger: ThreadMessenger; live: { settle(threadId: string): Promise<void> }; maxConcurrency: number }) {}
 
   poke(threadId: string): void {
     void this.drain(threadId);
@@ -32,7 +33,10 @@ export class ThreadQueueRunner {
 
   async status(threadId: string): Promise<void> {
     const session = this.deps.store.getSession(threadId);
-    if (!session) return this.deps.messenger.send(threadId, "No OMP session is mapped to this thread.");
+    if (!session) {
+      await this.deps.messenger.send(threadId, "No OMP session is mapped to this thread.");
+      return;
+    }
     const counts = this.deps.store.counts(threadId);
     await this.deps.messenger.send(threadId, formatStatus({ threadId, sessionFile: session.sessionFile, resumeSessionId: session.resumeSessionId, cwd: session.cwd, status: session.status, ...counts }));
   }
@@ -55,9 +59,19 @@ export class ThreadQueueRunner {
     return this.deps.omp.loadTranscript(session);
   }
 
+  /** Retires a thread whose omp session moved to `successorId`, dropping its background process. */
+  async supersede(threadId: string, successorId: string): Promise<void> {
+    this.deps.store.updateSession(threadId, { status: "archived" });
+    this.deps.omp.closeThread?.(threadId);
+    await this.deps.messenger.send(threadId, `This session now continues in <#${successorId}>.`).catch(() => undefined);
+  }
+
   async newSession(threadId: string): Promise<void> {
     const session = this.deps.store.getSession(threadId);
-    if (!session) return this.deps.messenger.send(threadId, "No OMP session is mapped to this thread.");
+    if (!session) {
+      await this.deps.messenger.send(threadId, "No OMP session is mapped to this thread.");
+      return;
+    }
     this.deps.store.updateSession(threadId, { resumeSessionId: null });
     const handle = await this.deps.omp.newSession({ ...session, resumeSessionId: null });
     this.deps.store.updateSession(threadId, { status: "active", sessionFile: `${session.sessionDir}/${handle.id}.json` });
@@ -66,7 +80,10 @@ export class ThreadQueueRunner {
 
   async compact(threadId: string): Promise<void> {
     const session = this.deps.store.getSession(threadId);
-    if (!session) return this.deps.messenger.send(threadId, "No OMP session is mapped to this thread.");
+    if (!session) {
+      await this.deps.messenger.send(threadId, "No OMP session is mapped to this thread.");
+      return;
+    }
     const handle = await this.deps.omp.open(session);
     await handle.compact?.();
     await this.deps.messenger.send(threadId, "Requested OMP context compaction for this session.");
@@ -92,12 +109,14 @@ export class ThreadQueueRunner {
       const handle = await this.deps.omp.open(session);
       const result = await handle.prompt(item.content, controller.signal);
       if (result.sessionFile) this.deps.store.updateSession(threadId, { sessionFile: result.sessionFile, status: "active" });
-      for (const chunk of chunkDiscordMessage(result.text, this.deps.messageLimit)) await this.deps.messenger.send(threadId, chunk);
+      await this.deps.live.settle(threadId);
       this.deps.store.markMessage(item.id, "done");
-    } catch (error: any) {
+    } catch (error) {
       const status = controller.signal.aborted ? "aborted" : "failed";
-      this.deps.store.markMessage(item.id, status, error?.message ?? String(error));
-      await this.deps.messenger.send(threadId, status === "aborted" ? "OMP turn aborted." : `OMP turn failed: ${error?.message ?? error}`);
+      const message = error instanceof Error ? error.message : String(error);
+      this.deps.store.markMessage(item.id, status, message);
+      await this.deps.live.settle(threadId);
+      await this.deps.messenger.send(threadId, status === "aborted" ? "OMP turn aborted." : `OMP turn failed: ${message}`);
     } finally {
       this.controllers.delete(threadId);
       this.runningThreads.delete(threadId);

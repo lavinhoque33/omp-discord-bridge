@@ -66,6 +66,7 @@ export function normalizeConfig(raw: unknown): BridgeConfig {
   const discord = data.discord ?? {};
   const omp = data.omp ?? {};
   const runtime = data.runtime ?? {};
+  const collab = data.collab ?? {};
   const slashCommands = discord.slashCommands ?? {};
   const guildsRaw = discord.guilds;
   if (!Array.isArray(guildsRaw) || guildsRaw.length === 0) {
@@ -104,9 +105,13 @@ export function normalizeConfig(raw: unknown): BridgeConfig {
       databasePath: expandHome(runtime.databasePath ?? "~/.omp/agent/discord-bridge.sqlite"),
       maxConcurrency: runtime.maxConcurrency ?? 2,
       maxAttachmentBytes: runtime.maxAttachmentBytes ?? 25_000_000,
-      responseMode: runtime.responseMode ?? "final-only",
       followupMode: runtime.followupMode ?? "steer",
       discordMessageLimit: runtime.discordMessageLimit ?? 1900,
+    },
+    collab: {
+      enabled: asOptionalBoolean(collab.enabled, true, "collab.enabled"),
+      relayPort: collab.relayPort ?? 7466,
+      displayName: asOptionalString(collab.displayName, "discord", "collab.displayName"),
     },
   };
   if (typeof cfg.discord.tokenEnv !== "string" || cfg.discord.tokenEnv.length === 0) throw new Error("discord.tokenEnv is required");
@@ -117,6 +122,8 @@ export function normalizeConfig(raw: unknown): BridgeConfig {
   if (!Number.isInteger(cfg.runtime.discordMessageLimit) || cfg.runtime.discordMessageLimit < 100 || cfg.runtime.discordMessageLimit > 2000) {
     throw new Error("runtime.discordMessageLimit must be between 100 and 2000");
   }
+  if (!Number.isInteger(cfg.collab.relayPort) || cfg.collab.relayPort < 1 || cfg.collab.relayPort > 65_535) throw new Error("collab.relayPort must be a port number");
+  if (!cfg.collab.displayName.trim()) throw new Error("collab.displayName must not be empty");
   return cfg;
 }
 

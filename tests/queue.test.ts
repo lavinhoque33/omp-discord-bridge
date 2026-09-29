@@ -5,14 +5,15 @@ import { describe, expect, it } from "vitest";
 import { BridgeStore } from "../src/store.js";
 import { FakeOmpSessionFactory } from "../src/omp-session.js";
 import { ThreadQueueRunner, parseThreadCommand } from "../src/queue.js";
+import { recordingMessenger } from "./live-messenger.js";
 
 function fixture() {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "bridge-queue-"));
   const store = new BridgeStore(path.join(tmp, "state.sqlite"));
   store.createSession({ threadId: "t", guildId: "g", parentChannelId: "c", triggerMessageId: "m", sessionFile: null, sessionDir: tmp, cwd: tmp, model: null, thinkingLevel: null, createdByUserId: "u" });
-  const sent: string[] = [];
-  const omp = new FakeOmpSessionFactory((message) => `answer ${message}`);
-  const runner = new ThreadQueueRunner({ store, omp, messenger: { send: async (_thread, content) => { sent.push(content); } }, messageLimit: 1900, maxConcurrency: 1 });
+  const { sent, messenger, live } = recordingMessenger();
+  const omp = new FakeOmpSessionFactory((message) => `answer ${message}`, live.push);
+  const runner = new ThreadQueueRunner({ store, omp, messenger, live, maxConcurrency: 1 });
   return { store, sent, omp, runner };
 }
 

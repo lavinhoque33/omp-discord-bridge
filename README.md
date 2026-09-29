@@ -12,11 +12,13 @@ The project is intentionally small: a Node.js daemon, a SQLite queue/store, Disc
 - **Serialized per-thread queue** — multiple users can enqueue turns safely while global concurrency stays bounded.
 - **Live OMP controls** — use `status`, `stop`, `new`, and `compact` inside managed threads, or slash-command equivalents.
 - **Session history threads** — `/sessions` in a project channel lists the OMP sessions recorded for that directory and opens a thread bound to the one you pick, so Discord continues the original session file.
+- **Shared live sessions with your terminal** — while an omp TUI has a thread's session open, the thread joins it over omp's collab protocol: prompts from Discord run in the TUI's own session and everything the TUI does shows up in the thread.
+- **Live rendering** — agent text streams into its own message (edited as it grows) and every tool call gets a message that flips from 🔧 to ✅/❌ with an output tail.
 - **Discord slash commands** — syncs `/sessions`, `/omp`, `/omp-status`, `/omp-stop`, `/omp-new`, `/omp-compact`, and OMP ACP tools.
 - **All ACP commands are invokable** — safe core ACP commands register directly (`/todo`, `/model`, `/tools`); namespaced commands use autocomplete runners (`/skill`, `/codex`, `/posthog`, etc.).
 - **Configurable follow-ups** — either steer the currently running OMP turn or enqueue messages behind it.
 - **Attachment context** — includes Discord attachment URLs in prompts up to a configurable byte limit.
-- **Message chunking** — responses are split under Discord message limits.
+- **Message chunking** — long blocks are split under Discord message limits.
 - **OMP extension entrypoint** — package metadata exposes `dist/src/extension.js` for OMP to load.
 
 Approval forwarding is intentionally out of scope: the ACP adapter currently auto-selects an allow option for headless operation.
@@ -27,7 +29,7 @@ Approval forwarding is intentionally out of scope: the ACP adapter currently aut
 2. The daemon creates a thread named from the prompt.
 3. The thread/session mapping is stored in SQLite.
 4. Prompts from that thread are serialized through a per-thread queue.
-5. The OMP ACP adapter runs the prompt and streams the final response back to Discord.
+5. The OMP ACP adapter runs the prompt and streams text and tool calls into the thread as they happen.
 6. Later thread messages continue the same OMP session until `new`, `stop`, or daemon cleanup.
 
 ### Continuing an existing OMP session
@@ -39,7 +41,29 @@ Inside a channel that maps to a project directory (a `discord_sessions` row keye
 
 Picking a session creates a thread whose record stores the chosen id in `resume_session_id`. The first message in that thread resumes the session over ACP (`session/resume`) instead of starting a new one, so the original session file keeps its history — and stays usable from the terminal. `new` in that thread clears the binding and starts a fresh session.
 
-Opening a session also replays it: the bridge runs ACP `session/load` once and posts the most recent user/assistant messages into the new thread (last 20 entries, capped at 8000 characters, thinking and tool calls omitted — the header reports how many tool calls were skipped), so the Discord thread shows what was already said. Prompting keeps using `session/resume`, which attaches without re-sending history.
+Opening a session also replays it: the bridge posts the most recent user/assistant messages into the new thread (last 20 entries, capped at 8000 characters, thinking and tool calls omitted — the header reports how many tool calls were skipped), so the Discord thread shows what was already said. The history comes from the live terminal session when one is attached, otherwise from ACP `session/load`.
+
+Only one thread follows a session: opening the same session again retires the older thread (it points to the new one and refuses further prompts), so there is never a second writer.
+
+### Live sessions with your terminal
+
+omp processes do not share memory, so a TUI and a background ACP process writing the same session file each keep their own branch. The bridge avoids that by joining the TUI instead, as a writable guest over omp's `/collab` protocol, through a relay embedded in the daemon (`ws://127.0.0.1:7466`, nothing leaves the machine).
+
+One-time setup on the machine running the daemon:
+
+```bash
+omp config set collab.autoStart control
+omp config set collab.relayUrl ws://127.0.0.1:7466
+```
+
+TUIs started before this need a restart. From then on:
+
+- While a TUI has the session open, the thread is attached to it (the thread says so). Messages from Discord run inside the TUI's session — queued behind or steered into whatever it is doing — and prompts typed in the terminal appear in the thread quoted as **🖥️ terminal**, followed by the streamed reply and tool calls.
+- When the TUI closes or switches sessions, the thread detaches and later messages continue the session in a background ACP process, reloaded from the session file.
+- If a TUI hosts the session but the bridge cannot join it, the turn fails with the reason instead of falling back to a background process, which would fork the session.
+- Questions omp asks in the TUI (selectors, confirmations) are announced in the thread; answer them in the terminal.
+
+The bridge finds hosts through `omp collab list` and watches `~/.omp/run/collab-hosts` for changes.
 
 ## Slash-command model
 
@@ -130,9 +154,12 @@ runtime:
   databasePath: "~/.omp/agent/discord-bridge.sqlite"
   maxConcurrency: 2
   maxAttachmentBytes: 25000000
-  responseMode: edit-preview-then-final
   followupMode: steer # steer | queue
   discordMessageLimit: 1900
+collab:
+  enabled: true
+  relayPort: 7466
+  displayName: discord
 ```
 
 ### Important settings
@@ -150,6 +177,9 @@ runtime:
 | `runtime.followupMode` | `steer` sends follow-ups into the running turn when possible; `queue` always queues. |
 | `runtime.maxConcurrency` | Maximum number of threads with active OMP turns at once. |
 | `runtime.discordMessageLimit` | Chunk size cap for outbound Discord messages. |
+| `collab.enabled` | Join omp TUIs hosting a thread's session and run the embedded relay (default `true`). |
+| `collab.relayPort` | Port of the embedded relay on 127.0.0.1 (default `7466`); omp's `collab.relayUrl` must point at it. |
+| `collab.displayName` | Name the bridge uses in the collab room (default `discord`). |
 
 ### Explicit ACP command list
 
@@ -196,17 +226,23 @@ The test suite covers:
 - slash-command generation and ACP namespace routing;
 - SQLite session and queue persistence;
 - queue serialization, stop/new-session controls, and response rendering;
+- live rendering (post-then-edit blocks, coalescing, chunking) and ACP update translation;
+- the collab relay and guest end to end against a fake omp host, link parsing, and transcript extraction;
 - OMP ACP launch helpers and fake session behavior.
 
 ## Repository layout
 
 ```text
+src/collab.ts          omp collab guest: link parsing, encryption, joined TUI sessions
 src/config.ts          YAML loading, defaults, validation
 src/daemon.ts          daemon startup, Discord login, slash sync
 src/discord.ts         Discord event handlers and permission checks
+src/live.ts            live rendering of text/tool blocks into threads
 src/omp-session.ts     OMP ACP and fake session adapters
 src/queue.ts           per-thread queue runner and controls
+src/relay.ts           embedded collab relay
 src/render.ts          message chunking/thread-name rendering
+src/router.ts          routes threads to a live TUI (collab) or a background ACP process
 src/slash-commands.ts  slash command generation/autocomplete/routing
 src/store.ts           SQLite persistence
 tests/                 Vitest coverage for the daemon pieces

@@ -97,6 +97,10 @@ export class BridgeStore {
     const row = this.db.prepare("SELECT * FROM discord_sessions WHERE thread_id = ?").get(threadId);
     return row ? rowToSession(row) : undefined;
   }
+  /** Active threads that continue an existing omp session, oldest first. */
+  activeResumedSessions(): DiscordSessionRecord[] {
+    return this.db.prepare("SELECT * FROM discord_sessions WHERE status='active' AND resume_session_id IS NOT NULL ORDER BY created_at ASC").all().map(rowToSession);
+  }
   updateSession(threadId: string, patch: Partial<Pick<DiscordSessionRecord, "sessionFile" | "resumeSessionId" | "status" | "model" | "thinkingLevel">>): void {
     const current = this.getSession(threadId);
     if (!current) throw new Error(`unknown thread ${threadId}`);

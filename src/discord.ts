@@ -10,10 +10,15 @@ import { acpAutocompleteChoices, resolveAcpSlashPrompt } from "./slash-commands.
 
 export class DiscordThreadMessenger {
   constructor(private client: Client) {}
-  async send(threadId: string, content: string): Promise<void> {
+  async send(threadId: string, content: string): Promise<string> {
     const channel = await this.client.channels.fetch(threadId);
     if (!channel || !channel.isTextBased() || !("send" in channel)) throw new Error(`thread ${threadId} is not sendable`);
-    await channel.send({ content });
+    return (await channel.send({ content })).id;
+  }
+  async edit(threadId: string, messageId: string, content: string): Promise<void> {
+    const channel = await this.client.channels.fetch(threadId);
+    if (!channel || !channel.isTextBased()) throw new Error(`thread ${threadId} is not editable`);
+    await channel.messages.edit(messageId, { content });
   }
   async typing(threadId: string): Promise<void> {
     const channel = await this.client.channels.fetch(threadId);
@@ -104,6 +109,10 @@ async function openSessionThread(input: {
   fs.mkdirSync(input.config.omp.sessionRoot, { recursive: true });
   const sessionDir = path.join(input.config.omp.sessionRoot, thread.id);
   fs.mkdirSync(sessionDir, { recursive: true });
+  // One thread per omp session: an older thread would be a second writer (and a second live mirror).
+  for (const previous of input.store.activeResumedSessions()) {
+    if (previous.resumeSessionId === input.session.sessionId) await input.runner.supersede(previous.threadId, thread.id);
+  }
   input.store.createSession({
     threadId: thread.id,
     guildId: input.guildId,
@@ -130,7 +139,7 @@ async function openSessionThread(input: {
   await thread.send([
     `Continuing omp session \`${input.session.sessionId}\`${input.session.title ? ` — **${input.session.title}**` : ""} for \`${input.cwd}\`.`,
     "Send a message here to pick that conversation back up. Controls: `status`, `stop`, `new` (fresh session), `compact`.",
-    "This thread writes to the same session file your terminal uses — avoid driving it from both at once.",
+    "While an omp TUI has this session open, this thread shares it live; otherwise messages continue it in a background omp process.",
   ].join("\n"));
   return thread.id;
 }
@@ -141,6 +150,10 @@ export async function handleDiscordMessage(deps: { config: BridgeConfig; store: 
   if (!botId) return;
   const existing = deps.store.getSession(message.channelId);
   if (existing) {
+    if (existing.status === "archived") {
+      if (message.channel.isTextBased() && "send" in message.channel) await message.channel.send("This thread was replaced by a newer thread for the same omp session.");
+      return;
+    }
     const command = parseThreadCommand(message.content);
     if (command === "status") return deps.runner.status(message.channelId);
     if (command === "stop") return deps.runner.stop(message.channelId);
@@ -331,6 +344,10 @@ export async function handleDiscordInteraction(deps: { config: BridgeConfig; sto
 
   if (!existing) {
     await interaction.editReply({ content: "Slash commands must be used in an OMP-managed thread." });
+    return;
+  }
+  if (existing.status === "archived") {
+    await interaction.editReply({ content: "This thread was replaced by a newer thread for the same omp session." });
     return;
   }
 

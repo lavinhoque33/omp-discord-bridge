@@ -1,15 +1,22 @@
 #!/usr/bin/env node
 import process from "node:process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import { BridgeStore } from "./store.js";
 import { ThreadQueueRunner } from "./queue.js";
-import { AcpOmpSessionFactory } from "./omp-session.js";
+import { AcpOmpSessionFactory, resolveOmpCliCommand } from "./omp-session.js";
 import { createDiscordClient, DiscordThreadMessenger, handleDiscordInteraction, handleDiscordMessage } from "./discord.js";
+import { LiveThreads } from "./live.js";
+import { startCollabRelay, type CollabRelay } from "./relay.js";
+import { SessionRouter } from "./router.js";
 import { coreAcpCommands, syncDiscordSlashCommands } from "./slash-commands.js";
-import type { BridgeAvailableCommand, BridgeConfig, DiscordSessionRecord, OmpSessionFactory } from "./types.js";
+import type { BridgeAvailableCommand, BridgeConfig, DiscordSessionRecord } from "./types.js";
+
+/** Minimum gap between edit passes on one thread while omp streams (Discord rate-limits edits). */
+const LIVE_EDIT_INTERVAL_MS = 1_000;
 
 function arg(name: string, fallback?: string): string | undefined {
   const idx = process.argv.indexOf(name);
@@ -97,14 +104,29 @@ export async function startDaemon(configPath: string): Promise<{ stop(): Promise
   const recovered = store.recoverRunning();
   if (recovered > 0) console.warn(`Recovered ${recovered} in-flight OMP turn(s) after daemon restart.`);
   const messenger = new DiscordThreadMessenger(client);
-  const omp: OmpSessionFactory = new AcpOmpSessionFactory();
-  const runner = new ThreadQueueRunner({ store, omp, messenger, messageLimit: config.runtime.discordMessageLimit, maxConcurrency: config.runtime.maxConcurrency });
+  const live = new LiveThreads(messenger, { intervalMs: LIVE_EDIT_INTERVAL_MS, messageLimit: config.runtime.discordMessageLimit });
+  const acp = new AcpOmpSessionFactory({ sink: live.push });
+  const router = config.collab.enabled
+    ? new SessionRouter({ acp, store, sink: live.push, cliPath: resolveOmpCliCommand(), displayName: config.collab.displayName, hostsDir: path.join(os.homedir(), ".omp", "run", "collab-hosts") })
+    : null;
+  const omp = router ?? acp;
+  let relay: CollabRelay | null = null;
+  if (config.collab.enabled) {
+    try {
+      relay = await startCollabRelay(config.collab.relayPort);
+      console.log(`Collab relay listening on ${relay.url} (set omp collab.relayUrl to it).`);
+    } catch (error) {
+      console.warn(`Collab relay not started on port ${config.collab.relayPort} (${error instanceof Error ? error.message : String(error)}); joining terminals through whichever relay they use.`);
+    }
+  }
+  const runner = new ThreadQueueRunner({ store, omp, messenger, live, maxConcurrency: config.runtime.maxConcurrency });
   client.on("error", (error) => console.error("discord client error", error));
   client.on("shardError", (error) => console.error("discord shard error", error));
   client.on("messageCreate", (message) => { void handleDiscordMessage({ config, store, runner }, message).catch((error) => console.error("message handling failed", error)); });
   client.on("interactionCreate", (interaction) => { void handleDiscordInteraction({ config, store, runner }, interaction).catch((error) => console.error("interaction handling failed", error)); });
   await client.login(token);
   await syncDiscordSlashCommands(client, config);
+  router?.start();
   for (const threadId of store.queuedThreadIds()) runner.poke(threadId);
   console.log(`OMP Discord bridge logged in as ${client.user?.tag ?? client.user?.id ?? "unknown bot"}`);
   let stopped = false;
@@ -113,7 +135,8 @@ export async function startDaemon(configPath: string): Promise<{ stop(): Promise
       if (stopped) return;
       stopped = true;
       await client.destroy();
-      omp.close?.();
+      omp.close();
+      await relay?.close();
       store.close();
     },
   };

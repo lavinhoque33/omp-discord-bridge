@@ -12,6 +12,7 @@ import { ThreadQueueRunner, parseManageCommand } from "../src/queue.js";
 import { buildDiscordSlashCommands } from "../src/slash-commands.js";
 import { BridgeStore } from "../src/store.js";
 import type { OmpSessionSummary } from "../src/types.js";
+import { recordingMessenger } from "./live-messenger.js";
 
 type PostedMessage = { content?: string; components?: unknown[] };
 
@@ -23,10 +24,10 @@ function createHarness(sessions: OmpSessionSummary[] = []) {
     runtime: { databasePath: path.join(tmp, "db.sqlite") },
   });
   const store = new BridgeStore(config.runtime.databasePath);
-  const omp = new FakeOmpSessionFactory();
+  const { sent, messenger, live } = recordingMessenger();
+  const omp = new FakeOmpSessionFactory(undefined, live.push);
   omp.sessions = sessions;
-  const sent: string[] = [];
-  const runner = new ThreadQueueRunner({ store, omp, messenger: { send: async (_threadId, content) => { sent.push(content); } }, messageLimit: 1900, maxConcurrency: 1 });
+  const runner = new ThreadQueueRunner({ store, omp, messenger, live, maxConcurrency: 1 });
   return { config, store, omp, runner, sent, tmp };
 }
 
@@ -234,6 +235,27 @@ describe("session history commands", () => {
 
     expect(message.startThread).toHaveBeenCalledWith(expect.objectContaining({ name: "omp-initialize-housesync" }));
     expect(store.getSession(thread.id)?.resumeSessionId).toBe(handoverId);
+  });
+
+  it("retires the older thread when the same session is opened again, and refuses prompts there", async () => {
+    const sessions: OmpSessionSummary[] = [{ sessionId: handoverId, title: "Initialize HouseSync", cwd: "/proj", updatedAt: "2026-09-27T17:28:59.000Z" }];
+    const { config, store, runner, sent, omp } = createHarness(sessions);
+    seedChannelSession(store, "proj1", "/proj");
+    seedChannelSession(store, "old-thread", "/proj", handoverId);
+    const { message, thread } = fakeChannelMessage("open 01a0e3e9");
+
+    await handleDiscordMessage({ config, store, runner }, message as unknown as Message);
+
+    expect(store.getSession("old-thread")?.status).toBe("archived");
+    expect(store.activeResumedSessions().map((record) => record.threadId)).toEqual([thread.id]);
+    expect(sent).toContain(`This session now continues in <#${thread.id}>.`);
+
+    const stale = fakeSessionThreadMessage("keep going");
+    const staleMessage = { ...stale.message, channelId: "old-thread" };
+    await handleDiscordMessage({ config, store, runner }, staleMessage as unknown as Message);
+    expect(stale.posted.map((post) => post.content)).toEqual(["This thread was replaced by a newer thread for the same omp session."]);
+    expect(store.nextQueued("old-thread")).toBeUndefined();
+    expect(omp.prompts).toEqual([]);
   });
 
   it("reports unknown session references without opening a thread", async () => {

@@ -8,6 +8,7 @@ import { BridgeStore } from "../src/store.js";
 import { FakeOmpSessionFactory } from "../src/omp-session.js";
 import { ThreadQueueRunner } from "../src/queue.js";
 import { handleDiscordInteraction, handleDiscordMessage } from "../src/discord.js";
+import { recordingMessenger } from "./live-messenger.js";
 
 function fakeMessage(content: string, overrides: any = {}) {
   const thread = { id: "thread1", send: vi.fn(async (_msg: string) => undefined) };
@@ -52,8 +53,8 @@ describe("Discord orchestration", () => {
     const tmp = mkdtempSync(path.join(os.tmpdir(), "bridge-discord-"));
     const config = normalizeConfig({ discord: { guilds: [{ id: "guild1", allowedChannels: ["chan1"], allowedUsers: ["user1"] }] }, omp: { cwd: tmp, sessionRoot: path.join(tmp, "sessions") }, runtime: { databasePath: path.join(tmp, "db.sqlite") } });
     const store = new BridgeStore(config.runtime.databasePath);
-    const sent: string[] = [];
-    const runner = new ThreadQueueRunner({ store, omp: new FakeOmpSessionFactory(), messenger: { send: async (_t, c) => { sent.push(c); } }, messageLimit: 1900, maxConcurrency: 1 });
+    const { sent, messenger, live } = recordingMessenger();
+    const runner = new ThreadQueueRunner({ store, omp: new FakeOmpSessionFactory(undefined, live.push), messenger, live, maxConcurrency: 1 });
     const { msg, thread } = fakeMessage("<@bot1> hello bridge");
     await handleDiscordMessage({ config, store, runner }, msg);
     expect(msg.startThread).toHaveBeenCalledWith(expect.objectContaining({ name: "omp-hello-bridge" }));
@@ -74,7 +75,8 @@ describe("Discord orchestration", () => {
       if (message === "first") await firstTurnDone;
       return `answer ${message}`;
     });
-    const runner = new ThreadQueueRunner({ store, omp, messenger: { send: async () => undefined }, messageLimit: 1900, maxConcurrency: 1 });
+    const { messenger, live } = recordingMessenger();
+    const runner = new ThreadQueueRunner({ store, omp, messenger, live, maxConcurrency: 1 });
     store.enqueue({ threadId: "thread1", discordMessageId: "msg1", authorId: "user1", content: "first" });
     runner.poke("thread1");
     await new Promise((resolve) => setTimeout(resolve, 50));

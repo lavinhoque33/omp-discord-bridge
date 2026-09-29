@@ -40,9 +40,15 @@ export interface BridgeConfig {
     databasePath: string;
     maxConcurrency: number;
     maxAttachmentBytes: number;
-    responseMode: "final-only" | "edit-preview-then-final";
     followupMode: "steer" | "queue";
     discordMessageLimit: number;
+  };
+  collab: {
+    /** Run the embedded collab relay so live omp TUIs can be joined; point omp's `collab.relayUrl` at it. */
+    enabled: boolean;
+    relayPort: number;
+    /** Guest name shown in the TUI next to prompts sent from Discord. */
+    displayName: string;
   };
 }
 
@@ -99,9 +105,20 @@ export interface QueuedMessageRecord {
 }
 
 export interface OmpPromptResult {
-  text: string;
   sessionFile?: string;
 }
+
+/**
+ * What a Discord thread shows while omp works. Events are keyed: a later event with the same key
+ * replaces the earlier rendering (streamed text grows, a running tool call completes).
+ */
+export type LiveEvent =
+  | { type: "user"; key: string; author: string; text: string }
+  | { type: "text"; key: string; text: string }
+  | { type: "tool"; key: string; name?: string; title: string; detail?: string; state: "running" | "ok" | "error"; output?: string }
+  | { type: "notice"; key: string; text: string };
+
+export type LiveSink = (threadId: string, event: LiveEvent) => void;
 
 export interface OmpSessionHandle {
   id: string;
@@ -119,10 +136,14 @@ export interface OmpSessionFactory {
   listSessions?(record: DiscordSessionRecord): Promise<OmpSessionSummary[]>;
   /** Replay the conversation of the session `record` continues (ACP `session/load`). */
   loadTranscript?(record: DiscordSessionRecord): Promise<SessionTranscript>;
+  /** Stops the thread's omp process, if any; the next `open` starts from the session file. */
+  closeThread?(threadId: string): void;
   close?(): Promise<void> | void;
 }
 
 export interface ThreadMessenger {
-  send(threadId: string, content: string): Promise<void>;
+  /** Posts a message and returns its id. */
+  send(threadId: string, content: string): Promise<string>;
+  edit(threadId: string, messageId: string, content: string): Promise<void>;
   typing?(threadId: string): Promise<void>;
 }

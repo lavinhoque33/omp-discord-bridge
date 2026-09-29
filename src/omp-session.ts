@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type AvailableCommand, type Client as AcpClient, type SessionInfo, type SessionNotification } from "@agentclientprotocol/sdk";
-import type { DiscordSessionRecord, OmpSessionFactory, OmpSessionHandle, OmpPromptResult, OmpSessionSummary, SessionTranscript, SessionTranscriptEntry } from "./types.js";
+import { toolDetail, toolResultText } from "./live.js";
+import type { DiscordSessionRecord, LiveEvent, LiveSink, OmpSessionFactory, OmpSessionHandle, OmpPromptResult, OmpSessionSummary, SessionTranscript, SessionTranscriptEntry } from "./types.js";
 
 type AcpLaunchInput = {
   cwd: string;
@@ -92,8 +93,8 @@ export async function listAcpSessions(input: { cwd: string; sessionDir: string; 
   }
 }
 
-const SESSION_HISTORY_MESSAGES = 20;
-const SESSION_HISTORY_CHARS = 8_000;
+/** How much of an existing session a newly opened thread replays. */
+export const SESSION_HISTORY = { messages: 20, chars: 8_000 };
 
 /** Keeps the newest entries that fit the budget, oldest first, each capped to the char budget. */
 export function tailTranscript(entries: SessionTranscriptEntry[], options: { messages: number; chars: number }): SessionTranscriptEntry[] {
@@ -147,16 +148,18 @@ export async function loadAcpTranscript(input: { cwd: string; sessionDir: string
   try {
     await connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
     await connection.loadSession({ sessionId: input.sessionId, cwd: input.cwd, mcpServers: [] });
-    return { entries: tailTranscript(collected, { messages: SESSION_HISTORY_MESSAGES, chars: SESSION_HISTORY_CHARS }), toolCalls, totalMessages: collected.length };
+    return { entries: tailTranscript(collected, SESSION_HISTORY), toolCalls, totalMessages: collected.length };
   } finally {
     clearTimeout(timer);
     child.kill();
   }
 }
 
+type AcpFactoryOptions = { cliPath?: string; env?: Record<string, string>; sink?: LiveSink };
+
 export class AcpOmpSessionFactory implements OmpSessionFactory {
   private handles = new Map<string, AcpProcessSessionHandle>();
-  constructor(private options: { cliPath?: string; env?: Record<string, string> } = {}) {}
+  constructor(private options: AcpFactoryOptions = {}) {}
   async listSessions(record: DiscordSessionRecord): Promise<OmpSessionSummary[]> {
     return listAcpSessions({
       cwd: record.cwd,
@@ -183,13 +186,67 @@ export class AcpOmpSessionFactory implements OmpSessionFactory {
     return handle;
   }
   async newSession(record: DiscordSessionRecord): Promise<OmpSessionHandle> {
-    this.handles.get(record.threadId)?.close();
-    this.handles.delete(record.threadId);
+    this.closeThread(record.threadId);
     return this.open(record);
+  }
+  /** Drops the thread's omp process; the next `open` starts (or resumes) from the session file again. */
+  closeThread(threadId: string): void {
+    this.handles.get(threadId)?.close();
+    this.handles.delete(threadId);
   }
   close(): void {
     for (const handle of this.handles.values()) handle.close();
     this.handles.clear();
+  }
+}
+
+/** Turns ACP session updates into keyed live events: streamed text blocks and tool calls. */
+export class AcpLiveTranslator {
+  private turn = 0;
+  private blocks = 0;
+  private textKey: string | null = null;
+  private text = "";
+  private tools = new Map<string, { title: string; detail?: string }>();
+
+  constructor(private emit: (event: LiveEvent) => void) {}
+
+  startTurn(): void {
+    this.turn += 1;
+    this.textKey = null;
+    this.tools.clear();
+  }
+
+  update(update: SessionNotification["update"]): void {
+    switch (update.sessionUpdate) {
+      case "agent_message_chunk": {
+        if (update.content.type !== "text") return;
+        if (!this.textKey) {
+          this.textKey = `acp:${this.turn}:${this.blocks++}`;
+          this.text = "";
+        }
+        this.text += update.content.text;
+        this.emit({ type: "text", key: this.textKey, text: this.text });
+        return;
+      }
+      case "tool_call": {
+        this.textKey = null;
+        const detail = toolDetail(update.rawInput, update.title);
+        const tool = { title: update.title, ...(detail ? { detail } : {}) };
+        this.tools.set(update.toolCallId, tool);
+        this.emit({ type: "tool", key: `tool:${update.toolCallId}`, ...tool, state: "running" });
+        return;
+      }
+      case "tool_call_update": {
+        if (update.status !== "completed" && update.status !== "failed") return;
+        const tool = this.tools.get(update.toolCallId) ?? { title: update.title ?? "tool" };
+        this.tools.delete(update.toolCallId);
+        const output = toolResultText(update.rawOutput);
+        this.emit({ type: "tool", key: `tool:${update.toolCallId}`, ...tool, state: update.status === "failed" ? "error" : "ok", ...(output ? { output } : {}) });
+        return;
+      }
+      default:
+        return;
+    }
   }
 }
 
@@ -198,23 +255,25 @@ class AcpProcessSessionHandle implements OmpSessionHandle {
   private connection: ClientSideConnection | null = null;
   private sessionId: string | null = null;
   private ready: Promise<void> | null = null;
-  private textBuffer = "";
   private commands: AvailableCommand[] = [];
+  private live: AcpLiveTranslator;
 
-  constructor(private record: DiscordSessionRecord, private options: { cliPath?: string; env?: Record<string, string> } = {}) {}
+  constructor(private record: DiscordSessionRecord, private options: AcpFactoryOptions = {}) {
+    this.live = new AcpLiveTranslator((event) => this.options.sink?.(this.record.threadId, event));
+  }
 
   get id(): string { return this.record.threadId; }
 
   async prompt(message: string, signal?: AbortSignal): Promise<OmpPromptResult> {
     await this.start();
     if (!this.connection || !this.sessionId) throw new Error("ACP session not ready");
-    this.textBuffer = "";
     if (signal?.aborted) throw new Error("aborted");
+    this.live.startTurn();
     const abort = () => { void this.abort(); };
     signal?.addEventListener("abort", abort, { once: true });
     try {
       await this.connection.prompt({ sessionId: this.sessionId, prompt: [{ type: "text", text: message }] });
-      return { text: this.textBuffer || "(OMP completed without text output)", sessionFile: path.join(this.record.sessionDir, `${this.record.threadId}.json`) };
+      return { sessionFile: path.join(this.record.sessionDir, `${this.record.threadId}.json`) };
     } finally {
       signal?.removeEventListener("abort", abort);
     }
@@ -266,9 +325,8 @@ class AcpProcessSessionHandle implements OmpSessionHandle {
 
   private handleSessionUpdate(params: SessionNotification): void {
     if (this.sessionId && params.sessionId !== this.sessionId) return;
-    const update = params.update;
-    if (update.sessionUpdate === "available_commands_update") this.commands = update.availableCommands;
-    if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") this.textBuffer += update.content.text;
+    if (params.update.sessionUpdate === "available_commands_update") this.commands = params.update.availableCommands;
+    else this.live.update(params.update);
   }
 }
 
@@ -278,7 +336,9 @@ export class FakeOmpSessionFactory implements OmpSessionFactory {
   sessionsCreated = 0;
   sessions: OmpSessionSummary[] = [];
   transcript: SessionTranscript = { entries: [], toolCalls: 0, totalMessages: 0 };
-  constructor(private responder: (message: string) => string | Promise<string> = (message) => `echo: ${message}`) {}
+  private turns = 0;
+  /** Each prompt's reply is streamed to `sink` as one assistant text block. */
+  constructor(private responder: (message: string) => string | Promise<string> = (message) => `echo: ${message}`, private sink: LiveSink = () => undefined) {}
   async listSessions(): Promise<OmpSessionSummary[]> { return this.sessions; }
   async loadTranscript(): Promise<SessionTranscript> { return this.transcript; }
   async open(record: DiscordSessionRecord): Promise<OmpSessionHandle> { return this.handle(record); }
@@ -289,7 +349,9 @@ export class FakeOmpSessionFactory implements OmpSessionFactory {
       prompt: async (message, signal) => {
         if (signal?.aborted) throw new Error("aborted");
         this.prompts.push(message);
-        return { text: await this.responder(message), sessionFile: path.join(record.sessionDir, `${record.threadId}.json`) };
+        const text = await this.responder(message);
+        this.sink(record.threadId, { type: "text", key: `fake:${++this.turns}`, text });
+        return { sessionFile: path.join(record.sessionDir, `${record.threadId}.json`) };
       },
       steer: async (message) => { this.steers.push(message); },
       abort: async () => undefined,

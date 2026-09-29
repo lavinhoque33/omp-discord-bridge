@@ -22,6 +22,13 @@ runtime:
   databasePath: "~/.omp/agent/discord-bridge.sqlite"
   maxConcurrency: 2
   maxAttachmentBytes: 25000000
-  responseMode: edit-preview-then-final
   followupMode: steer # steer | queue
   discordMessageLimit: 1900
+collab:
+  # Share a thread's session live with an omp TUI that has it open (omp /collab protocol).
+  # Point omp at the embedded relay:
+  #   omp config set collab.autoStart control
+  #   omp config set collab.relayUrl ws://127.0.0.1:7466
+  enabled: true
+  relayPort: 7466
+  displayName: discord
